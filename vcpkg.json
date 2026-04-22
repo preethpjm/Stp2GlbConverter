@@ -1,0 +1,8 @@
+{
+  "name": "cad-step-to-glb",
+  "version": "1.0.0",
+  "dependencies": [
+    "opencascade",
+    "nlohmann-json"
+  ]
+}
