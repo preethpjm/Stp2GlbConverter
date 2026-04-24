@@ -76,42 +76,72 @@ AssemblyNode StepParser::BuildAssemblyTree(
     }
     node.id = std::to_string(label.Tag());
 
-    // Get this label's own location and combine with parent
+    // Get this label's location
     TopLoc_Location loc = shapeTool->GetLocation(label);
-    gp_Trsf localTrsf   = loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.IsIdentity() ? gp_Trsf() : loc.Transformation();
-    node.transform = localTrsf;
+    node.transform = loc.IsIdentity() ? gp_Trsf() : loc.Transformation();
 
     if (shapeTool->IsAssembly(label)) {
-        // Recurse into components
+        // Get only DIRECT children (not recursive - we handle recursion ourselves)
         TDF_LabelSequence components;
         shapeTool->GetComponents(label, components, Standard_False);
+
+        Logger::Info("  Assembly: " + node.name + 
+                     " -> " + std::to_string(components.Length()) + " components");
 
         for (Standard_Integer i = 1; i <= components.Length(); ++i) {
             TDF_Label compLabel = components.Value(i);
 
-            // Get the instance transform from the component label
+            // Get instance transform from the component label
             TopLoc_Location compLoc = shapeTool->GetLocation(compLabel);
             gp_Trsf compTrsf = compLoc.IsIdentity() ? gp_Trsf() : compLoc.Transformation();
 
-            // Get the referred (prototype) shape label
+            // Get the actual shape this component refers to
             TDF_Label referred;
             if (XCAFDoc_ShapeTool::GetReferredShape(compLabel, referred)) {
+                // Recurse into the referred shape
                 AssemblyNode child = BuildAssemblyTree(
                     shapeTool, referred, compTrsf, model
                 );
-                // Override transform with the instance placement
+                child.transform = compTrsf;
+
+                // Get child name from component label if referred has none
+                if (child.name.empty()) {
+                    Handle(TDataStd_Name) compName;
+                    if (compLabel.FindAttribute(TDataStd_Name::GetID(), compName)) {
+                        child.name = TCollection_AsciiString(compName->Get()).ToCString();
+                    }
+                }
+
+                node.children.push_back(child);
+            } else {
+                // No referred shape — treat component itself as a part
+                AssemblyNode child = BuildAssemblyTree(
+                    shapeTool, compLabel, compTrsf, model
+                );
                 child.transform = compTrsf;
                 node.children.push_back(child);
             }
         }
-    } else {
-        // Leaf part — tessellate
+    } else if (shapeTool->IsSimpleShape(label)) {
+        // Leaf part — tessellate it
         node.isPart = true;
         TopoDS_Shape shape = shapeTool->GetShape(label);
 
-        size_t meshIdx   = MeshConverter::ConvertAndCache(shape, model);
-        node.partIndex   = model.parts.size();
-        model.parts.push_back({node.id, node.name, meshIdx, 1});
+        if (!shape.IsNull()) {
+            size_t meshIdx = MeshConverter::ConvertAndCache(shape, model);
+            node.partIndex = model.parts.size();
+            model.parts.push_back({node.id, node.name, meshIdx, 1});
+            Logger::Info("  Part: " + node.name + 
+                        " meshIdx=" + std::to_string(meshIdx));
+        } else {
+            Logger::Warning("  Null shape for: " + node.name);
+        }
+    } else if (shapeTool->IsReference(label)) {
+        // This label is itself a reference — resolve it
+        TDF_Label referred;
+        if (XCAFDoc_ShapeTool::GetReferredShape(label, referred)) {
+            return BuildAssemblyTree(shapeTool, referred, parentTransform, model);
+        }
     }
 
     return node;

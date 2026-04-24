@@ -27,7 +27,7 @@ size_t MeshConverter::ConvertAndCache(const TopoDS_Shape& shape, ModelData& mode
 
     // Tessellate with reasonable quality
     // 0.1mm linear deflection, 0.5 deg angular deflection
-    BRepMesh_IncrementalMesh mesher(shape, 0.1, Standard_False, 0.5);
+    BRepMesh_IncrementalMesh mesher(shape, 1.0, Standard_False, 0.5);
     mesher.Perform();
 
     Mesh mesh = ExtractMeshData(shape);
