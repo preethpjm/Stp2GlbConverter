@@ -7,8 +7,16 @@
 #include <TDataStd_Name.hxx>
 #include <TDF_LabelSequence.hxx>
 #include <TCollection_AsciiString.hxx>
-#include <BRep_Builder.hxx>
+#include <TDF_Tool.hxx>
 #include <Utils/logger.h>
+#include <sstream>
+
+// Helper to get a unique string ID from a TDF_Label
+static std::string LabelToString(const TDF_Label& label) {
+    TCollection_AsciiString entry;
+    TDF_Tool::Entry(label, entry);
+    return entry.ToCString();
+}
 
 bool StepParser::Load(const std::string& stepFile, ModelData& outModel) {
     Logger::Info("Parsing STEP file: " + stepFile);
@@ -29,7 +37,7 @@ bool StepParser::Load(const std::string& stepFile, ModelData& outModel) {
     }
 
     if (!reader.Transfer(doc)) {
-        Logger::Error("Failed to transfer STEP data to document");
+        Logger::Error("Failed to transfer STEP data");
         return false;
     }
 
@@ -44,13 +52,17 @@ bool StepParser::Load(const std::string& stepFile, ModelData& outModel) {
         return false;
     }
 
-    // Build root assembly node
+    Logger::Info("Free shapes found: " + std::to_string(freeShapes.Length()));
+
     outModel.root.name = "Root";
     outModel.root.id   = "root";
 
     for (Standard_Integer i = 1; i <= freeShapes.Length(); ++i) {
         AssemblyNode child = BuildAssemblyTree(
-            shapeTool, freeShapes.Value(i), gp_Trsf(), outModel
+            shapeTool,
+            freeShapes.Value(i),
+            gp_Trsf(),
+            outModel
         );
         outModel.root.children.push_back(child);
     }
@@ -68,80 +80,75 @@ AssemblyNode StepParser::BuildAssemblyTree(
     ModelData& model)
 {
     AssemblyNode node;
+    node.id = LabelToString(label);
 
     // Get name
     Handle(TDataStd_Name) nameAttr;
     if (label.FindAttribute(TDataStd_Name::GetID(), nameAttr)) {
         node.name = TCollection_AsciiString(nameAttr->Get()).ToCString();
     }
-    node.id = std::to_string(label.Tag());
+    if (node.name.empty()) node.name = "Part_" + node.id;
 
-    // Get this label's location
+    // Get transform
     TopLoc_Location loc = shapeTool->GetLocation(label);
     node.transform = loc.IsIdentity() ? gp_Trsf() : loc.Transformation();
 
     if (shapeTool->IsAssembly(label)) {
-        // Get only DIRECT children (not recursive - we handle recursion ourselves)
+        // --- ASSEMBLY NODE ---
         TDF_LabelSequence components;
         shapeTool->GetComponents(label, components, Standard_False);
-
-        Logger::Info("  Assembly: " + node.name + 
-                     " -> " + std::to_string(components.Length()) + " components");
 
         for (Standard_Integer i = 1; i <= components.Length(); ++i) {
             TDF_Label compLabel = components.Value(i);
 
-            // Get instance transform from the component label
+            // Get instance placement transform
             TopLoc_Location compLoc = shapeTool->GetLocation(compLabel);
             gp_Trsf compTrsf = compLoc.IsIdentity() ? gp_Trsf() : compLoc.Transformation();
 
-            // Get the actual shape this component refers to
+            // Resolve reference to actual shape
             TDF_Label referred;
+            TDF_Label targetLabel = compLabel;
+
             if (XCAFDoc_ShapeTool::GetReferredShape(compLabel, referred)) {
-                // Recurse into the referred shape
-                AssemblyNode child = BuildAssemblyTree(
-                    shapeTool, referred, compTrsf, model
-                );
-                child.transform = compTrsf;
-
-                // Get child name from component label if referred has none
-                if (child.name.empty()) {
-                    Handle(TDataStd_Name) compName;
-                    if (compLabel.FindAttribute(TDataStd_Name::GetID(), compName)) {
-                        child.name = TCollection_AsciiString(compName->Get()).ToCString();
-                    }
-                }
-
-                node.children.push_back(child);
-            } else {
-                // No referred shape — treat component itself as a part
-                AssemblyNode child = BuildAssemblyTree(
-                    shapeTool, compLabel, compTrsf, model
-                );
-                child.transform = compTrsf;
-                node.children.push_back(child);
+                targetLabel = referred;
             }
+
+            // Recurse
+            AssemblyNode child = BuildAssemblyTree(
+                shapeTool, targetLabel, compTrsf, model
+            );
+
+            // Always use the INSTANCE transform, not the prototype's
+            child.transform = compTrsf;
+
+            // Use component label name if child has no name
+            if (child.name.empty() || child.name.substr(0, 5) == "Part_") {
+                Handle(TDataStd_Name) compName;
+                if (compLabel.FindAttribute(TDataStd_Name::GetID(), compName)) {
+                    child.name = TCollection_AsciiString(compName->Get()).ToCString();
+                }
+            }
+
+            node.children.push_back(child);
         }
-    } else if (shapeTool->IsSimpleShape(label)) {
-        // Leaf part — tessellate it
+
+    } else {
+        // --- LEAF PART ---
         node.isPart = true;
         TopoDS_Shape shape = shapeTool->GetShape(label);
 
-        if (!shape.IsNull()) {
-            size_t meshIdx = MeshConverter::ConvertAndCache(shape, model);
-            node.partIndex = model.parts.size();
-            model.parts.push_back({node.id, node.name, meshIdx, 1});
-            Logger::Info("  Part: " + node.name + 
-                        " meshIdx=" + std::to_string(meshIdx));
-        } else {
-            Logger::Warning("  Null shape for: " + node.name);
+        if (shape.IsNull()) {
+            Logger::Warning("Null shape: " + node.name);
+            return node;
         }
-    } else if (shapeTool->IsReference(label)) {
-        // This label is itself a reference — resolve it
-        TDF_Label referred;
-        if (XCAFDoc_ShapeTool::GetReferredShape(label, referred)) {
-            return BuildAssemblyTree(shapeTool, referred, parentTransform, model);
-        }
+
+        // Use label entry as unique part ID for caching
+        // This preserves instancing — same label = same mesh
+        std::string cacheKey = LabelToString(label);
+
+        size_t meshIdx = MeshConverter::ConvertAndCache(shape, cacheKey, model);
+        node.partIndex = model.parts.size();
+        model.parts.push_back({node.id, node.name, meshIdx, 1});
     }
 
     return node;
