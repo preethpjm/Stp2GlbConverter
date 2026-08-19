@@ -17,21 +17,19 @@ size_t MeshConverter::ConvertAndCache(
     const std::string& partId,
     ModelData& model)
 {
-    // Use partId as the cache key — this is unique per part
-    // NOT shape hash which was causing merging
+    // Pure mesh caching only. Instance-count bookkeeping lives in
+    // StepParser via model.partIndexCache — the old approach of guessing
+    // via model.parts.back() was wrong whenever another part got pushed
+    // between two instances of the same repeated part.
     auto it = model.meshCache.find(partId);
     if (it != model.meshCache.end()) {
-        // This is a real instance of an existing mesh
-        if (!model.parts.empty())
-            model.parts.back().instanceCount++;
         return it->second;
     }
 
-    // Adaptive deflection based on shape size
     Bnd_Box bbox;
     BRepBndLib::Add(shape, bbox);
     double xmin, ymin, zmin, xmax, ymax, zmax;
-    double deflection = 0.5; // default
+    double deflection = 0.5;
 
     if (!bbox.IsVoid()) {
         bbox.Get(xmin, ymin, zmin, xmax, ymax, zmax);
@@ -40,11 +38,13 @@ size_t MeshConverter::ConvertAndCache(
             (ymax-ymin)*(ymax-ymin) +
             (zmax-zmin)*(zmax-zmin)
         );
-        // Scale deflection to model size — 0.1% of diagonal
         deflection = std::max(0.01, diagLen * 0.001);
     }
 
-    BRepMesh_IncrementalMesh mesher(shape, deflection, Standard_False, 0.5);
+    // isInParallel = true (5th arg): lets OCCT triangulate a single shape's
+    // faces across multiple threads. Real lever on the meshing phase of
+    // large assemblies (was ~31% of total time on a 700MB/2600-part test).
+    BRepMesh_IncrementalMesh mesher(shape, deflection, Standard_False, 0.5, Standard_True);
     mesher.Perform();
 
     Mesh mesh = ExtractMeshData(shape);
@@ -76,19 +76,16 @@ Mesh MeshConverter::ExtractMeshData(const TopoDS_Shape& shape) {
         Standard_Integer nTris  = tri->NbTriangles();
         size_t base = m.vertices.size() / 3;
 
-        // Extract vertices
         for (Standard_Integer i = 1; i <= nNodes; ++i) {
             gp_Pnt p = tri->Node(i).Transformed(trsf);
             m.vertices.push_back((float)p.X());
             m.vertices.push_back((float)p.Y());
             m.vertices.push_back((float)p.Z());
-            // Initialize normals to zero — accumulated below
             m.normals.push_back(0.0f);
             m.normals.push_back(0.0f);
             m.normals.push_back(0.0f);
         }
 
-        // Extract triangles
         for (Standard_Integer i = 1; i <= nTris; ++i) {
             Poly_Triangle t = tri->Triangle(i);
             Standard_Integer n1, n2, n3;
@@ -104,7 +101,6 @@ Mesh MeshConverter::ExtractMeshData(const TopoDS_Shape& shape) {
             m.indices.push_back(i2);
             m.indices.push_back(i3);
 
-            // Compute face normal
             gp_Pnt p1(m.vertices[i1*3],   m.vertices[i1*3+1], m.vertices[i1*3+2]);
             gp_Pnt p2(m.vertices[i2*3],   m.vertices[i2*3+1], m.vertices[i2*3+2]);
             gp_Pnt p3(m.vertices[i3*3],   m.vertices[i3*3+1], m.vertices[i3*3+2]);
@@ -116,7 +112,6 @@ Mesh MeshConverter::ExtractMeshData(const TopoDS_Shape& shape) {
             double len = normal.Magnitude();
             if (len > 1e-10) normal /= len;
 
-            // Accumulate into vertices
             for (unsigned int vi : {i1, i2, i3}) {
                 m.normals[vi*3]   += (float)normal.X();
                 m.normals[vi*3+1] += (float)normal.Y();
@@ -125,7 +120,6 @@ Mesh MeshConverter::ExtractMeshData(const TopoDS_Shape& shape) {
         }
     }
 
-    // Normalize all normals
     for (size_t i = 0; i + 2 < m.normals.size(); i += 3) {
         float nx = m.normals[i];
         float ny = m.normals[i+1];
@@ -136,7 +130,6 @@ Mesh MeshConverter::ExtractMeshData(const TopoDS_Shape& shape) {
             m.normals[i+1] /= len;
             m.normals[i+2] /= len;
         } else {
-            // Default normal if degenerate
             m.normals[i]   = 0.0f;
             m.normals[i+1] = 1.0f;
             m.normals[i+2] = 0.0f;

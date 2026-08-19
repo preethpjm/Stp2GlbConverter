@@ -5,26 +5,39 @@
 #include <iostream>
 #include <string>
 
+static HierarchyMode ParseMode(const std::string& s) {
+    if (s == "hierarchy") return HierarchyMode::ForceHierarchy;
+    if (s == "flat")      return HierarchyMode::ForceFlat;
+    return HierarchyMode::Auto;
+}
+
 int main(int argc, char* argv[]) {
     std::string inputFile = (argc > 1) ? argv[1] : "assembly.stp";
     std::string glbOut    = (argc > 2) ? argv[2] : "output.glb";
     std::string jsonOut   = (argc > 3) ? argv[3] : "assembly.json";
+    HierarchyMode mode = (argc > 4) ? ParseMode(argv[4]) : HierarchyMode::Auto;
 
     std::cout << "=== STEP to GLB Converter ===" << std::endl;
     std::cout << "Input:  " << inputFile << std::endl;
     std::cout << "GLB:    " << glbOut << std::endl;
     std::cout << "JSON:   " << jsonOut << std::endl;
+    std::cout << "Mode:   " << (argc > 4 ? argv[4] : "auto") << std::endl;
 
     ModelData model;
     StepParser parser;
 
     std::cout << "\n[1/3] Parsing STEP file..." << std::endl;
-    if (!parser.Load(inputFile, model)) {
+    if (!parser.Load(inputFile, model, mode)) {
         std::cerr << "ERROR: Failed to parse STEP file." << std::endl;
         return 1;
     }
     std::cout << "  Parts:        " << model.parts.size() << std::endl;
     std::cout << "  Unique meshes: " << model.uniqueMeshes.size() << std::endl;
+    for (const auto& r : model.rootReports) {
+        std::cout << "  Root \"" << r.rootName << "\": "
+                   << (r.hierarchyAvailable ? "hierarchy" : "geometry-split")
+                   << (r.wasForced ? " (forced)" : "") << std::endl;
+    }
 
     std::cout << "\n[2/3] Exporting GLB..." << std::endl;
     if (!GlbExporter::Export(model, glbOut)) {
