@@ -6,6 +6,8 @@
 #include <StepBasic_ProductDefinitionFormation.hxx>
 #include <StepBasic_Product.hxx>
 #include <TCollection_HAsciiString.hxx>
+#include <Utils/logger.h>
+#include <Standard_Type.hxx>
 
 ProductInfo StepEntityExtractor::GetProductInfo(STEPCAFControl_Reader& reader, const TopoDS_Shape& shape) {
     ProductInfo info;
@@ -16,12 +18,20 @@ ProductInfo StepEntityExtractor::GetProductInfo(STEPCAFControl_Reader& reader, c
     Handle(XSControl_TransferReader) TR = WS->TransferReader();
     if (TR.IsNull()) return info;
 
-    Handle(Standard_Transient) ent = TR->EntityFromShapeResult(shape, -1);
-    if (ent.IsNull()) return info;
+    // Mode is 1-4 in OCCT's API (different binder-map search strategies) —
+    // -1 is not valid and silently returns null every time, which is the
+    // likely cause of description/partNumber never coming through. Try
+    // each mode in order rather than hardcoding one we can't verify here.
+    Handle(Standard_Transient) ent;
+    for (Standard_Integer mode = 1; mode <= 4 && ent.IsNull(); ++mode) {
+        ent = TR->EntityFromShapeResult(shape, mode);
+    }
+    if (ent.IsNull()) {
+        Logger::Warning("EntityFromShapeResult found nothing for this shape "
+                         "(tried modes 1-4) — no partNumber/description available.");
+        return info;
+    }
 
-    // EntityFromShapeResult can return either a ProductDefinitionShape or, for
-    // some representation paths, a ProductDefinition directly — try both rather
-    // than assuming one.
     Handle(StepBasic_ProductDefinition) prodDef;
 
     Handle(StepRepr_ProductDefinitionShape) pds = Handle(StepRepr_ProductDefinitionShape)::DownCast(ent);
@@ -30,7 +40,11 @@ ProductInfo StepEntityExtractor::GetProductInfo(STEPCAFControl_Reader& reader, c
     } else {
         prodDef = Handle(StepBasic_ProductDefinition)::DownCast(ent);
     }
-    if (prodDef.IsNull()) return info;
+    if (prodDef.IsNull()) {
+        Logger::Warning("Resolved entity is neither ProductDefinitionShape nor "
+                         "ProductDefinition — type is: " + std::string(ent->DynamicType()->Name()));
+        return info;
+    }
 
     Handle(StepBasic_ProductDefinitionFormation) formation = prodDef->Formation();
     if (formation.IsNull()) return info;

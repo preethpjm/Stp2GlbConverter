@@ -14,12 +14,138 @@ Build/
     Release/
         cad-step-to-glb.exp
         cad-step-to-glb.lib
+    STP_to_GLB_Release3.2/
+        README.txt
+        TKBO.dll
+        TKBRep.dll
+        TKBin.dll
+        TKBinL.dll
+        TKBinTObj.dll
+        TKBinXCAF.dll
+        TKBool.dll
+        TKCAF.dll
+        TKCDF.dll
+        TKDE.dll
+        TKDECascade.dll
+        TKDEGLTF.dll
+        TKDEIGES.dll
+        TKDEOBJ.dll
+        TKDEPLY.dll
+        TKDESTEP.dll
+        TKDESTL.dll
+        TKDEVRML.dll
+        TKFeat.dll
+        TKFillet.dll
+        TKG2d.dll
+        TKG3d.dll
+        TKGeomAlgo.dll
+        TKGeomBase.dll
+        TKHLR.dll
+        TKLCAF.dll
+        TKMath.dll
+        TKMesh.dll
+        TKMeshVS.dll
+        TKOffset.dll
+        TKOpenGl.dll
+        TKPrim.dll
+        TKRWMesh.dll
+        TKService.dll
+        TKShHealing.dll
+        TKStd.dll
+        TKStdL.dll
+        TKTObj.dll
+        TKTopAlgo.dll
+        TKV3d.dll
+        TKVCAF.dll
+        TKXCAF.dll
+        TKXMesh.dll
+        TKXSBase.dll
+        TKXml.dll
+        TKXmlL.dll
+        TKXmlTObj.dll
+        TKXmlXCAF.dll
+        TKernel.dll
+        VC_redist.x64.exe
+        brotlicommon.dll
+        brotlidec.dll
+        brotlienc.dll
+        bz2.dll
+        cad-step-to-glb.exe
+        convert.bat
+        freetype.dll
+        libpng16.dll
+        zlib1.dll
+    STP_to_GLB_Release3.3/
+        README.txt
+        TKBO.dll
+        TKBRep.dll
+        TKBin.dll
+        TKBinL.dll
+        TKBinTObj.dll
+        TKBinXCAF.dll
+        TKBool.dll
+        TKCAF.dll
+        TKCDF.dll
+        TKDE.dll
+        TKDECascade.dll
+        TKDEGLTF.dll
+        TKDEIGES.dll
+        TKDEOBJ.dll
+        TKDEPLY.dll
+        TKDESTEP.dll
+        TKDESTL.dll
+        TKDEVRML.dll
+        TKFeat.dll
+        TKFillet.dll
+        TKG2d.dll
+        TKG3d.dll
+        TKGeomAlgo.dll
+        TKGeomBase.dll
+        TKHLR.dll
+        TKLCAF.dll
+        TKMath.dll
+        TKMesh.dll
+        TKMeshVS.dll
+        TKOffset.dll
+        TKOpenGl.dll
+        TKPrim.dll
+        TKRWMesh.dll
+        TKService.dll
+        TKShHealing.dll
+        TKStd.dll
+        TKStdL.dll
+        TKTObj.dll
+        TKTopAlgo.dll
+        TKV3d.dll
+        TKVCAF.dll
+        TKXCAF.dll
+        TKXMesh.dll
+        TKXSBase.dll
+        TKXml.dll
+        TKXmlL.dll
+        TKXmlTObj.dll
+        TKXmlXCAF.dll
+        TKernel.dll
+        VC_redist.x64.exe
+        brotlicommon.dll
+        brotlidec.dll
+        brotlienc.dll
+        bz2.dll
+        cad-step-to-glb.exe
+        convert.bat
+        freetype.dll
+        libpng16.dll
+        zlib1.dll
 core/
     data_model.h
     geometry_processor.cpp
     geometry_processor.h
     mesh_converter.cpp
     mesh_converter.h
+    step_entity_extractor.cpp
+    step_entity_extractor.h
+    step_header_parser.cpp
+    step_header_parser.h
     step_parser.cpp
     step_parser.h
 export/
@@ -62,6 +188,8 @@ add_executable(cad-step-to-glb
     core/step_parser.cpp
     core/geometry_processor.cpp
     core/mesh_converter.cpp
+    core/step_header_parser.cpp
+    core/step_entity_extractor.cpp
     export/glb_exporter.cpp
     export/json_exporter.cpp
     utils/logger.cpp
@@ -282,26 +410,39 @@ FILE: main.cpp
 #include <iostream>
 #include <string>
 
+static HierarchyMode ParseMode(const std::string& s) {
+    if (s == "hierarchy") return HierarchyMode::ForceHierarchy;
+    if (s == "flat")      return HierarchyMode::ForceFlat;
+    return HierarchyMode::Auto;
+}
+
 int main(int argc, char* argv[]) {
     std::string inputFile = (argc > 1) ? argv[1] : "assembly.stp";
     std::string glbOut    = (argc > 2) ? argv[2] : "output.glb";
     std::string jsonOut   = (argc > 3) ? argv[3] : "assembly.json";
+    HierarchyMode mode = (argc > 4) ? ParseMode(argv[4]) : HierarchyMode::Auto;
 
     std::cout << "=== STEP to GLB Converter ===" << std::endl;
     std::cout << "Input:  " << inputFile << std::endl;
     std::cout << "GLB:    " << glbOut << std::endl;
     std::cout << "JSON:   " << jsonOut << std::endl;
+    std::cout << "Mode:   " << (argc > 4 ? argv[4] : "auto") << std::endl;
 
     ModelData model;
     StepParser parser;
 
     std::cout << "\n[1/3] Parsing STEP file..." << std::endl;
-    if (!parser.Load(inputFile, model)) {
+    if (!parser.Load(inputFile, model, mode)) {
         std::cerr << "ERROR: Failed to parse STEP file." << std::endl;
         return 1;
     }
     std::cout << "  Parts:        " << model.parts.size() << std::endl;
     std::cout << "  Unique meshes: " << model.uniqueMeshes.size() << std::endl;
+    for (const auto& r : model.rootReports) {
+        std::cout << "  Root \"" << r.rootName << "\": "
+                   << (r.hierarchyAvailable ? "hierarchy" : "geometry-split")
+                   << (r.wasForced ? " (forced)" : "") << std::endl;
+    }
 
     std::cout << "\n[2/3] Exporting GLB..." << std::endl;
     if (!GlbExporter::Export(model, glbOut)) {
@@ -326,20 +467,121 @@ int main(int argc, char* argv[]) {
 FILE: package.ps1
 ================================================================================
 
+$ErrorActionPreference = "Stop"
+
+# --- Adjust these two paths for your machine ---
+$ReleaseDir = "C:\Users\Preeth\Downloads\STP_to_GLB_Release"
+$ZipPath    = "C:\Users\Preeth\Downloads\STP_to_GLB_Converter.zip"
+$BuildDir   = "build\bin\Release"
+
 Write-Host "Building..."
 cmake --build build --config Release
 
-Write-Host "Copying exe to release folder..."
-Copy-Item "build\bin\Release\cad-step-to-glb.exe" `
-  "C:\Users\Preeth\Downloads\STP_to_GLB_Release\" -Force
+if (-not (Test-Path $ReleaseDir)) {
+    New-Item -ItemType Directory -Path $ReleaseDir | Out-Null
+}
+
+Write-Host "Copying exe + DLLs to release folder..."
+# CMakeLists.txt's post-build step already copies every OpenCASCADE DLL next
+# to the exe in $BuildDir, so copying the whole folder picks up everything.
+Copy-Item "$BuildDir\*" $ReleaseDir -Force -Recurse
+
+Write-Host "Writing convert.bat..."
+$ConvertBat = @'
+@echo off
+cd /d "%~dp0"
+
+if "%~1"=="" (
+    echo.
+    echo  STP to GLB Converter
+    echo  --------------------
+    echo  Usage:        convert.bat input.stp [output.glb] [assembly.json] [auto^|hierarchy^|flat]
+    echo  Drag and drop: drag your .stp file onto convert.bat
+    echo.
+    pause
+    exit /b 1
+)
+
+set INPUT=%~1
+set GLB=%~2
+set JSON=%~3
+set MODE=%~4
+
+if "%GLB%"==""  set GLB=%~dpn1.glb
+if "%JSON%"=="" set JSON=%~dpn1_assembly.json
+if "%MODE%"=="" set MODE=auto
+
+echo.
+echo  Input  : %INPUT%
+echo  GLB    : %GLB%
+echo  JSON   : %JSON%
+echo  Mode   : %MODE%   (auto / hierarchy / flat)
+echo.
+
+"%~dp0cad-step-to-glb.exe" "%INPUT%" "%GLB%" "%JSON%" "%MODE%"
+
+if %ERRORLEVEL% NEQ 0 (
+    echo.
+    echo  ERROR: Conversion failed. Check the output above for details.
+) else (
+    echo.
+    echo  Conversion successful!
+    echo  GLB  saved to: %GLB%
+    echo  JSON saved to: %JSON%
+)
+
+echo.
+pause
+'@
+Set-Content -Path "$ReleaseDir\convert.bat" -Value $ConvertBat -Encoding ASCII
+
+Write-Host "Writing README.txt..."
+$Readme = @'
+STP to GLB Converter
+====================
+
+HOW TO USE
+----------
+
+Option 1 - Drag and Drop (easiest):
+  Drag your .stp file onto convert.bat
+  The .glb and .json will be saved in the same folder as your .stp file.
+
+Option 2 - Command line:
+  convert.bat "path\to\file.stp"
+  convert.bat "path\to\file.stp" "output.glb" "assembly.json"
+  convert.bat "path\to\file.stp" "output.glb" "assembly.json" flat
+
+MODE (optional 4th argument)
+-----------------------------
+  auto      - (default) auto-detect whether the source has a real assembly
+              hierarchy and use it if so, otherwise fall back to splitting
+              by geometry/color.
+  hierarchy - force the hierarchy path even if detection says otherwise.
+  flat      - force the geometry-split path even if a real hierarchy exists.
+
+OUTPUT FILES
+------------
+  .glb   - 3D mesh, open in Windows 3D Viewer, Blender, online at gltf-viewer.donmccurdy.com
+  .json  - Bill of Materials and assembly tree
+
+NOTES
+-----
+  All required DLLs are included. No installation needed.
+  Keep all files in this folder together - do not move just the exe.
+  If launching on a machine without the Visual C++ runtime installed,
+  run vc_redist.x64.exe from this folder first (one-time, per machine).
+'@
+Set-Content -Path "$ReleaseDir\README.txt" -Value $Readme -Encoding ASCII
+
+if (-not (Test-Path "$ReleaseDir\vc_redist.x64.exe")) {
+    Write-Warning "vc_redist.x64.exe not found in $ReleaseDir. Download it from https://aka.ms/vs/17/release/vc_redist.x64.exe and place it there before zipping, so machines without the VC++ runtime can still run the exe."
+}
 
 Write-Host "Creating ZIP..."
-Compress-Archive `
-  -Path "C:\Users\Preeth\Downloads\STP_to_GLB_Release\*" `
-  -DestinationPath "C:\Users\Preeth\Downloads\STP_to_GLB_Converter.zip" `
-  -Force
+Compress-Archive -Path "$ReleaseDir\*" -DestinationPath $ZipPath -Force
 
-Write-Host "Done! ZIP is at C:\Users\Preeth\Downloads\STP_to_GLB_Converter.zip"
+Write-Host "Done! ZIP is at $ZipPath"
 
 
 ================================================================================
@@ -357,6 +599,190 @@ FILE: vcpkg.json
 
 
 ================================================================================
+FILE: Build\STP_to_GLB_Release3.2\README.txt
+================================================================================
+
+STP to GLB Converter
+====================
+
+HOW TO USE
+----------
+
+Option 1 - Drag and Drop (easiest):
+  Drag your .stp file onto convert.bat
+  The .glb and .json will be saved in the same folder as your .stp file.
+
+Option 2 - Command line:
+  convert.bat "path\to\file.stp"
+  convert.bat "path\to\file.stp" "output.glb" "assembly.json"
+  convert.bat "path\to\file.stp" "output.glb" "assembly.json" flat
+
+MODE (optional 4th argument)
+-----------------------------
+  auto      - (default) auto-detect whether the source has a real assembly
+              hierarchy and use it if so, otherwise fall back to splitting
+              by geometry/color.
+  hierarchy - force the hierarchy path even if detection says otherwise.
+  flat      - force the geometry-split path even if a real hierarchy exists.
+
+OUTPUT FILES
+------------
+  .glb   - 3D mesh, open in Windows 3D Viewer, Blender, online at gltf-viewer.donmccurdy.com
+  .json  - Bill of Materials and assembly tree
+
+NOTES
+-----
+  All required DLLs are included. No installation needed.
+  Keep all files in this folder together - do not move just the exe.
+  If launching on a machine without the Visual C++ runtime installed,
+  run vc_redist.x64.exe from this folder first (one-time, per machine).
+
+
+
+================================================================================
+FILE: Build\STP_to_GLB_Release3.2\convert.bat
+================================================================================
+
+@echo off
+cd /d "%~dp0"
+
+if "%~1"=="" (
+    echo.
+    echo  STP to GLB Converter
+    echo  --------------------
+    echo  Usage:        convert.bat input.stp [output.glb] [assembly.json] [auto^|hierarchy^|flat]
+    echo  Drag and drop: drag your .stp file onto convert.bat
+    echo.
+    pause
+    exit /b 1
+)
+
+set INPUT=%~1
+set GLB=%~2
+set JSON=%~3
+set MODE=%~4
+
+if "%GLB%"==""  set GLB=%~dpn1.glb
+if "%JSON%"=="" set JSON=%~dpn1_assembly.json
+if "%MODE%"=="" set MODE=auto
+
+echo.
+echo  Input  : %INPUT%
+echo  GLB    : %GLB%
+echo  JSON   : %JSON%
+echo  Mode   : %MODE%   (auto / hierarchy / flat)
+echo.
+
+"%~dp0cad-step-to-glb.exe" "%INPUT%" "%GLB%" "%JSON%" "%MODE%"
+
+if %ERRORLEVEL% NEQ 0 (
+    echo.
+    echo  ERROR: Conversion failed. Check the output above for details.
+) else (
+    echo.
+    echo  Conversion successful!
+    echo  GLB  saved to: %GLB%
+    echo  JSON saved to: %JSON%
+)
+
+echo.
+pause
+
+
+
+================================================================================
+FILE: Build\STP_to_GLB_Release3.3\README.txt
+================================================================================
+
+STP to GLB Converter
+====================
+
+HOW TO USE
+----------
+
+Option 1 - Drag and Drop (easiest):
+  Drag your .stp file onto convert.bat
+  The .glb and .json will be saved in the same folder as your .stp file.
+
+Option 2 - Command line:
+  convert.bat "path\to\file.stp"
+  convert.bat "path\to\file.stp" "output.glb" "assembly.json"
+  convert.bat "path\to\file.stp" "output.glb" "assembly.json" flat
+
+MODE (optional 4th argument)
+-----------------------------
+  auto      - (default) auto-detect whether the source has a real assembly
+              hierarchy and use it if so, otherwise fall back to splitting
+              by geometry/color.
+  hierarchy - force the hierarchy path even if detection says otherwise.
+  flat      - force the geometry-split path even if a real hierarchy exists.
+
+OUTPUT FILES
+------------
+  .glb   - 3D mesh, open in Windows 3D Viewer, Blender, online at gltf-viewer.donmccurdy.com
+  .json  - Bill of Materials and assembly tree
+
+NOTES
+-----
+  All required DLLs are included. No installation needed.
+  Keep all files in this folder together - do not move just the exe.
+  If launching on a machine without the Visual C++ runtime installed,
+  run vc_redist.x64.exe from this folder first (one-time, per machine).
+
+
+
+================================================================================
+FILE: Build\STP_to_GLB_Release3.3\convert.bat
+================================================================================
+
+@echo off
+cd /d "%~dp0"
+
+if "%~1"=="" (
+    echo.
+    echo  STP to GLB Converter
+    echo  --------------------
+    echo  Usage:        convert.bat input.stp [output.glb] [assembly.json] [auto^|hierarchy^|flat]
+    echo  Drag and drop: drag your .stp file onto convert.bat
+    echo.
+    pause
+    exit /b 1
+)
+
+set INPUT=%~1
+set GLB=%~2
+set JSON=%~3
+set MODE=%~4
+
+if "%GLB%"==""  set GLB=%~dpn1.glb
+if "%JSON%"=="" set JSON=%~dpn1_assembly.json
+if "%MODE%"=="" set MODE=auto
+
+echo.
+echo  Input  : %INPUT%
+echo  GLB    : %GLB%
+echo  JSON   : %JSON%
+echo  Mode   : %MODE%   (auto / hierarchy / flat)
+echo.
+
+"%~dp0cad-step-to-glb.exe" "%INPUT%" "%GLB%" "%JSON%" "%MODE%"
+
+if %ERRORLEVEL% NEQ 0 (
+    echo.
+    echo  ERROR: Conversion failed. Check the output above for details.
+) else (
+    echo.
+    echo  Conversion successful!
+    echo  GLB  saved to: %GLB%
+    echo  JSON saved to: %JSON%
+)
+
+echo.
+pause
+
+
+
+================================================================================
 FILE: core\data_model.h
 ================================================================================
 
@@ -365,6 +791,7 @@ FILE: core\data_model.h
 #include <vector>
 #include <unordered_map>
 #include <gp_Trsf.hxx>
+#include "step_header_parser.h"
 
 struct Mesh {
     std::vector<float> vertices;
@@ -373,11 +800,57 @@ struct Mesh {
     size_t vertexCount = 0;
 };
 
+struct ColorInfo {
+    bool hasColor = false;
+    float r = 0.0f, g = 0.0f, b = 0.0f;
+};
+
+// Populated from MATERIAL_DESIGNATION / PROPERTY_DEFINITION when the source
+// STEP file carries structured material data. Many exports (e.g. the F6137
+// valve file) don't populate this — material info there only exists as free
+// text inside the PRODUCT description field, which is a text-parsing
+// concern handled downstream, not here.
+struct MaterialInfo {
+    bool hasMaterial = false;
+    std::string name;
+    std::string description;
+    double density = 0.0;
+    std::string densityUnitName;
+};
+
+// From CAx-IF "3D Tessellated Data Validation Properties" recommended
+// practice. Only present if the exporting CAD tool chose to include it.
+struct ValidationProps {
+    bool hasArea = false;
+    bool hasVolume = false;
+    bool hasCentroid = false;
+    double area = 0.0;
+    double volume = 0.0;
+    double centroid[3] = {0.0, 0.0, 0.0};
+};
+
+// Best-effort PMI/GD&T capture. Semantic PMI support varies significantly
+// across CAD systems and OCCT versions — expect this to often be empty.
+struct PmiEntry {
+    std::string kind;       // "Dimension" | "GeometricTolerance" | "Datum"
+    std::string text;       // human-readable name/label if present
+    bool hasValue = false;
+    double value = 0.0;
+    std::vector<std::string> refPartIds;
+};
+
 struct PartNode {
     std::string id;
     std::string name;
     size_t meshIndex = 0;
     size_t instanceCount = 1;
+    bool hasGeometry = true;
+    ColorInfo color;
+    MaterialInfo material;
+    ValidationProps validation;
+    std::string partNumber;             // NEW — real STEP PRODUCT.Id()
+    std::string descriptionText;        // NEW — STEP PRODUCT.Description(), free-text hints
+    std::vector<std::string> layers;    // NEW — CAD layer/group assignments, if any
 };
 
 struct AssemblyNode {
@@ -389,11 +862,35 @@ struct AssemblyNode {
     size_t partIndex = 0;
 };
 
+// Lets you override auto-detection per run — useful when a file is an edge
+// case the heuristic gets wrong.
+enum class HierarchyMode {
+    Auto,            // default: decide per free shape via TreeHasRealStructure
+    ForceHierarchy,  // always use BuildAssemblyTree
+    ForceFlat        // always use BuildFromGeometrySplit
+};
+
+// Per top-level free shape record of which path was actually taken and why.
+// A single STEP file can contain multiple free shapes with different
+// outcomes (e.g. one real assembly + one flattened leftover blob).
+struct RootShapeInfo {
+    std::string rootId;
+    std::string rootName;
+    bool hierarchyAvailable = false;
+    bool wasForced = false;
+};
+
 struct ModelData {
     std::vector<Mesh> uniqueMeshes;
     std::vector<PartNode> parts;
     AssemblyNode root;
     std::unordered_map<std::string, size_t> meshCache;
+    std::unordered_map<std::string, size_t> partIndexCache;
+    std::vector<PmiEntry> pmi;
+    bool hierarchyAvailable = true;
+    std::vector<RootShapeInfo> rootReports;
+    double meshQualityMultiplier = 0.001;
+    DocumentMetadata documentMetadata;  // NEW
 };
 
 
@@ -456,21 +953,19 @@ size_t MeshConverter::ConvertAndCache(
     const std::string& partId,
     ModelData& model)
 {
-    // Use partId as the cache key — this is unique per part
-    // NOT shape hash which was causing merging
+    // Pure mesh caching only. Instance-count bookkeeping lives in
+    // StepParser via model.partIndexCache — the old approach of guessing
+    // via model.parts.back() was wrong whenever another part got pushed
+    // between two instances of the same repeated part.
     auto it = model.meshCache.find(partId);
     if (it != model.meshCache.end()) {
-        // This is a real instance of an existing mesh
-        if (!model.parts.empty())
-            model.parts.back().instanceCount++;
         return it->second;
     }
 
-    // Adaptive deflection based on shape size
     Bnd_Box bbox;
     BRepBndLib::Add(shape, bbox);
     double xmin, ymin, zmin, xmax, ymax, zmax;
-    double deflection = 0.5; // default
+    double deflection = 0.5;
 
     if (!bbox.IsVoid()) {
         bbox.Get(xmin, ymin, zmin, xmax, ymax, zmax);
@@ -479,11 +974,13 @@ size_t MeshConverter::ConvertAndCache(
             (ymax-ymin)*(ymax-ymin) +
             (zmax-zmin)*(zmax-zmin)
         );
-        // Scale deflection to model size — 0.1% of diagonal
         deflection = std::max(0.01, diagLen * 0.001);
     }
 
-    BRepMesh_IncrementalMesh mesher(shape, deflection, Standard_False, 0.5);
+    // isInParallel = true (5th arg): lets OCCT triangulate a single shape's
+    // faces across multiple threads. Real lever on the meshing phase of
+    // large assemblies (was ~31% of total time on a 700MB/2600-part test).
+    BRepMesh_IncrementalMesh mesher(shape, deflection, Standard_False, 0.5, Standard_True);
     mesher.Perform();
 
     Mesh mesh = ExtractMeshData(shape);
@@ -515,19 +1012,16 @@ Mesh MeshConverter::ExtractMeshData(const TopoDS_Shape& shape) {
         Standard_Integer nTris  = tri->NbTriangles();
         size_t base = m.vertices.size() / 3;
 
-        // Extract vertices
         for (Standard_Integer i = 1; i <= nNodes; ++i) {
             gp_Pnt p = tri->Node(i).Transformed(trsf);
             m.vertices.push_back((float)p.X());
             m.vertices.push_back((float)p.Y());
             m.vertices.push_back((float)p.Z());
-            // Initialize normals to zero — accumulated below
             m.normals.push_back(0.0f);
             m.normals.push_back(0.0f);
             m.normals.push_back(0.0f);
         }
 
-        // Extract triangles
         for (Standard_Integer i = 1; i <= nTris; ++i) {
             Poly_Triangle t = tri->Triangle(i);
             Standard_Integer n1, n2, n3;
@@ -543,7 +1037,6 @@ Mesh MeshConverter::ExtractMeshData(const TopoDS_Shape& shape) {
             m.indices.push_back(i2);
             m.indices.push_back(i3);
 
-            // Compute face normal
             gp_Pnt p1(m.vertices[i1*3],   m.vertices[i1*3+1], m.vertices[i1*3+2]);
             gp_Pnt p2(m.vertices[i2*3],   m.vertices[i2*3+1], m.vertices[i2*3+2]);
             gp_Pnt p3(m.vertices[i3*3],   m.vertices[i3*3+1], m.vertices[i3*3+2]);
@@ -555,7 +1048,6 @@ Mesh MeshConverter::ExtractMeshData(const TopoDS_Shape& shape) {
             double len = normal.Magnitude();
             if (len > 1e-10) normal /= len;
 
-            // Accumulate into vertices
             for (unsigned int vi : {i1, i2, i3}) {
                 m.normals[vi*3]   += (float)normal.X();
                 m.normals[vi*3+1] += (float)normal.Y();
@@ -564,7 +1056,6 @@ Mesh MeshConverter::ExtractMeshData(const TopoDS_Shape& shape) {
         }
     }
 
-    // Normalize all normals
     for (size_t i = 0; i + 2 < m.normals.size(); i += 3) {
         float nx = m.normals[i];
         float ny = m.normals[i+1];
@@ -575,7 +1066,6 @@ Mesh MeshConverter::ExtractMeshData(const TopoDS_Shape& shape) {
             m.normals[i+1] /= len;
             m.normals[i+2] /= len;
         } else {
-            // Default normal if degenerate
             m.normals[i]   = 0.0f;
             m.normals[i+1] = 1.0f;
             m.normals[i+2] = 0.0f;
@@ -611,31 +1101,330 @@ private:
 
 
 ================================================================================
+FILE: core\step_entity_extractor.cpp
+================================================================================
+
+#include "step_entity_extractor.h"
+#include <XSControl_WorkSession.hxx>
+#include <XSControl_TransferReader.hxx>
+#include <StepRepr_ProductDefinitionShape.hxx>
+#include <StepBasic_ProductDefinition.hxx>
+#include <StepBasic_ProductDefinitionFormation.hxx>
+#include <StepBasic_Product.hxx>
+#include <TCollection_HAsciiString.hxx>
+
+ProductInfo StepEntityExtractor::GetProductInfo(STEPCAFControl_Reader& reader, const TopoDS_Shape& shape) {
+    ProductInfo info;
+
+    Handle(XSControl_WorkSession) WS = reader.Reader().WS();
+    if (WS.IsNull()) return info;
+
+    Handle(XSControl_TransferReader) TR = WS->TransferReader();
+    if (TR.IsNull()) return info;
+
+    Handle(Standard_Transient) ent = TR->EntityFromShapeResult(shape, -1);
+    if (ent.IsNull()) return info;
+
+    // EntityFromShapeResult can return either a ProductDefinitionShape or, for
+    // some representation paths, a ProductDefinition directly — try both rather
+    // than assuming one.
+    Handle(StepBasic_ProductDefinition) prodDef;
+
+    Handle(StepRepr_ProductDefinitionShape) pds = Handle(StepRepr_ProductDefinitionShape)::DownCast(ent);
+    if (!pds.IsNull()) {
+        prodDef = Handle(StepBasic_ProductDefinition)::DownCast(pds->Definition().ProductDefinition());
+    } else {
+        prodDef = Handle(StepBasic_ProductDefinition)::DownCast(ent);
+    }
+    if (prodDef.IsNull()) return info;
+
+    Handle(StepBasic_ProductDefinitionFormation) formation = prodDef->Formation();
+    if (formation.IsNull()) return info;
+
+    Handle(StepBasic_Product) product = formation->OfProduct();
+    if (product.IsNull()) return info;
+
+    info.found = true;
+    if (!product->Id().IsNull())          info.partNumber  = product->Id()->ToCString();
+    if (!product->Description().IsNull()) info.description = product->Description()->ToCString();
+
+    return info;
+}
+
+
+================================================================================
+FILE: core\step_entity_extractor.h
+================================================================================
+
+#pragma once
+#include <string>
+#include <TopoDS_Shape.hxx>
+#include <STEPCAFControl_Reader.hxx>
+
+struct ProductInfo {
+    bool found = false;
+    std::string partNumber;   // STEP PRODUCT.Id() — the real human part number,
+                               // distinct from the descriptive Name already captured
+                               // (e.g. "F6137-M83461-1-014", not "O RING SEAL")
+    std::string description;  // STEP PRODUCT.Description() — free text, often carries
+                               // material/finish/revision-note hints not present
+                               // anywhere else (e.g. "JOINT ETHYLENE PROPYLENE
+                               // (POUR SKYDROL)" on an O-ring with no structured
+                               // material data)
+};
+
+// Reverse-maps a resulting TopoDS_Shape back to the STEP entity that produced it,
+// then walks the standard AP214/242 chain:
+//   ProductDefinitionShape -> ProductDefinition -> ProductDefinitionFormation -> Product
+//
+// CAVEAT: the shape->entity reverse lookup (EntityFromShapeResult) is the least
+// version-stable OCCT API used anywhere in this project — more so than the PMI
+// code. Test against F6137-D24907000.stp first, where the expected values are
+// already known (see conversation), before trusting this on new files. If it
+// returns found=false for everything, that call is the first thing to check
+// against your OCCT version's actual XSControl_TransferReader API.
+class StepEntityExtractor {
+public:
+    static ProductInfo GetProductInfo(STEPCAFControl_Reader& reader, const TopoDS_Shape& shape);
+};
+
+
+================================================================================
+FILE: core\step_header_parser.cpp
+================================================================================
+
+#include "step_header_parser.h"
+#include <fstream>
+#include <regex>
+#include <Utils/logger.h>
+
+static std::vector<std::string> ExtractQuotedStrings(const std::string& s) {
+    std::vector<std::string> out;
+    std::regex quoted("'([^']*)'");
+    auto begin = std::sregex_iterator(s.begin(), s.end(), quoted);
+    auto end = std::sregex_iterator();
+    for (auto it = begin; it != end; ++it) out.push_back((*it)[1].str());
+    return out;
+}
+
+DocumentMetadata StepHeaderParser::Parse(const std::string& stepFilePath) {
+    DocumentMetadata meta;
+
+    std::ifstream file(stepFilePath);
+    if (!file.is_open()) {
+        Logger::Warning("Could not open file for header parsing: " + stepFilePath);
+        return meta;
+    }
+
+    std::string headerText, line;
+    bool inHeader = false;
+    size_t bytesRead = 0;
+    const size_t MAX_HEADER_BYTES = 8192; // HEADER; is always small and near the top
+
+    while (std::getline(file, line)) {
+        bytesRead += line.size();
+        if (line.find("HEADER;") != std::string::npos) { inHeader = true; continue; }
+        if (inHeader) {
+            headerText += line + "\n";
+            if (line.find("ENDSEC;") != std::string::npos) break;
+        }
+        if (bytesRead > MAX_HEADER_BYTES) break;
+    }
+
+    // FILE_DESCRIPTION(('desc1','desc2',...),'impl_level');
+    {
+        std::smatch m;
+        std::regex re("FILE_DESCRIPTION\\s*\\((.*?)\\)\\s*;", std::regex::icase);
+        if (std::regex_search(headerText, m, re)) {
+            meta.descriptionNotes = ExtractQuotedStrings(m[1].str());
+        }
+    }
+
+    // FILE_NAME('name','timestamp',('author'),('org'),'system','preprocessor','auth_org');
+    // NOTE: author/org are technically lists in STEP; this positional extraction
+    // assumes the common single-author/single-org case (true for every file we've
+    // tested against). A file with multiple listed authors would shift later fields.
+    {
+        std::smatch m;
+        std::regex re("FILE_NAME\\s*\\((.*)\\)\\s*;", std::regex::icase);
+        if (std::regex_search(headerText, m, re)) {
+            auto fields = ExtractQuotedStrings(m[1].str());
+            if (fields.size() > 0) meta.originalFileName  = fields[0];
+            if (fields.size() > 1) meta.timestamp          = fields[1];
+            if (fields.size() > 2) meta.author             = fields[2];
+            if (fields.size() > 3) meta.organization       = fields[3];
+            if (fields.size() > 4) meta.originatingSystem  = fields[4];
+            if (fields.size() > 5) meta.preprocessorVersion = fields[5];
+        }
+    }
+
+    // FILE_SCHEMA(('SCHEMA_NAME { ... }'));
+    {
+        std::smatch m;
+        std::regex re("FILE_SCHEMA\\s*\\((.*?)\\)\\s*;", std::regex::icase);
+        if (std::regex_search(headerText, m, re)) {
+            auto fields = ExtractQuotedStrings(m[1].str());
+            if (!fields.empty()) meta.schema = fields[0];
+        }
+    }
+
+    Logger::Info("Header parsed — system: " + meta.originatingSystem +
+                 ", org: " + meta.organization + ", schema: " + meta.schema);
+
+    return meta;
+}
+
+
+================================================================================
+FILE: core\step_header_parser.h
+================================================================================
+
+#pragma once
+#include <string>
+#include <vector>
+
+// Document-level provenance metadata, read from the STEP file's HEADER;
+// section. Pure text parsing — no OCCT dependency, so unlike the entity
+// extraction below, this can't be broken by an OCCT version difference.
+struct DocumentMetadata {
+    std::string originalFileName;
+    std::string timestamp;
+    std::string author;
+    std::string organization;
+    std::string originatingSystem;    // e.g. "CATIA Version 5-6 Release 2017 SP6 HF31"
+    std::string preprocessorVersion;  // e.g. "CATIA V5 STEP AP242"
+    std::string schema;               // e.g. "AP242_MANAGED_MODEL_BASED_3D_ENGINEERING_MIM_LF"
+    std::vector<std::string> descriptionNotes; // FILE_DESCRIPTION strings — often list
+                                                 // which CAx-IF recommended practices the
+                                                 // exporter used (validation props, PMI, etc.)
+};
+
+class StepHeaderParser {
+public:
+    static DocumentMetadata Parse(const std::string& stepFilePath);
+};
+
+
+================================================================================
 FILE: core\step_parser.cpp
 ================================================================================
 
 #include "step_parser.h"
 #include "mesh_converter.h"
+#include "step_header_parser.h"
+#include "step_entity_extractor.h"
 #include <STEPCAFControl_Reader.hxx>
 #include <XCAFApp_Application.hxx>
 #include <XCAFDoc_DocumentTool.hxx>
 #include <XCAFDoc_ShapeTool.hxx>
+#include <XCAFDoc_Area.hxx>
+#include <XCAFDoc_Volume.hxx>
+#include <XCAFDoc_Centroid.hxx>
+#include <XCAFDoc_Dimension.hxx>
+#include <XCAFDoc_GeomTolerance.hxx>
+#include <XCAFDimTolObjects_DimensionObject.hxx>
+#include <XCAFDimTolObjects_GeomToleranceObject.hxx>
 #include <TDataStd_Name.hxx>
 #include <TDF_LabelSequence.hxx>
 #include <TCollection_AsciiString.hxx>
 #include <TDF_Tool.hxx>
+#include <TopExp_Explorer.hxx>
+#include <TopAbs_ShapeEnum.hxx>
+#include <Quantity_Color.hxx>
 #include <Utils/logger.h>
 #include <sstream>
+#include <TopoDS.hxx>
+#include <TopoDS_Compound.hxx>
+#include <TopoDS_Face.hxx>
+#include <BRep_Builder.hxx>
+#include <map>
 
-// Helper to get a unique string ID from a TDF_Label
 static std::string LabelToString(const TDF_Label& label) {
     TCollection_AsciiString entry;
     TDF_Tool::Entry(label, entry);
     return entry.ToCString();
 }
 
-bool StepParser::Load(const std::string& stepFile, ModelData& outModel) {
+std::vector<StepParser::FaceGroup> StepParser::SplitByFaceStyling(
+    const TopoDS_Shape& solid,
+    const Handle(XCAFDoc_ColorTool)& colorTool,
+    const Handle(XCAFDoc_LayerTool)& layerTool) const
+{
+    std::map<std::string, std::vector<TopoDS_Face>> groups;
+    std::map<std::string, ColorInfo> groupColor;
+    std::map<std::string, std::string> groupLayer;
+
+    TopExp_Explorer exp(solid, TopAbs_FACE);
+    for (; exp.More(); exp.Next()) {
+        TopoDS_Face face = TopoDS::Face(exp.Current());
+
+        ColorInfo color;
+        if (!colorTool.IsNull()) {
+            Quantity_Color col;
+            // Color lookup is shape-based in OCCT, not label-based, so this
+            // works at face granularity exactly like it does at solid
+            // granularity elsewhere in this file.
+            if (colorTool->GetColor(face, XCAFDoc_ColorSurf, col) ||
+                colorTool->GetColor(face, XCAFDoc_ColorGen, col)) {
+                color.hasColor = true;
+                color.r = (float)col.Red();
+                color.g = (float)col.Green();
+                color.b = (float)col.Blue();
+            }
+        }
+
+        std::string layerName;
+        if (!layerTool.IsNull()) {
+            TDF_LabelSequence layerLabels;
+            layerTool->GetLayers(face, layerLabels);
+            if (layerLabels.Length() > 0) {
+                Handle(TDataStd_Name) nameAttr;
+                if (layerLabels.Value(1).FindAttribute(TDataStd_Name::GetID(), nameAttr)) {
+                    layerName = TCollection_AsciiString(nameAttr->Get()).ToCString();
+                }
+            }
+        }
+
+        // Prefer color as the grouping signal (finer-grained, more commonly
+        // populated); fall back to layer; if neither exists, everything
+        // lands in one bucket — same as the old whole-solid behavior.
+        std::string sig;
+        if (color.hasColor) {
+            sig = "c:" + std::to_string((int)(color.r * 255)) + "-" +
+                          std::to_string((int)(color.g * 255)) + "-" +
+                          std::to_string((int)(color.b * 255));
+        } else if (!layerName.empty()) {
+            sig = "l:" + layerName;
+        } else {
+            sig = "ungrouped";
+        }
+
+        groups[sig].push_back(face);
+        groupColor[sig] = color;
+        groupLayer[sig] = layerName;
+    }
+
+    std::vector<FaceGroup> result;
+    for (auto& kv : groups) {
+        TopoDS_Compound comp;
+        BRep_Builder builder;
+        builder.MakeCompound(comp);
+        for (auto& f : kv.second) builder.Add(comp, f);
+
+        FaceGroup fg;
+        fg.shape = comp;
+        fg.color = groupColor[kv.first];
+        fg.layerTag = groupLayer[kv.first];
+        result.push_back(fg);
+    }
+    return result;
+}
+
+
+bool StepParser::Load(const std::string& stepFile, ModelData& outModel, HierarchyMode mode) {
     Logger::Info("Parsing STEP file: " + stepFile);
+
+    outModel.documentMetadata = StepHeaderParser::Parse(stepFile);
 
     Handle(XCAFApp_Application) app = XCAFApp_Application::GetApplication();
     Handle(TDocStd_Document) doc;
@@ -645,6 +1434,9 @@ bool StepParser::Load(const std::string& stepFile, ModelData& outModel) {
     reader.SetNameMode(Standard_True);
     reader.SetColorMode(Standard_True);
     reader.SetLayerMode(Standard_True);
+    reader.SetMatMode(Standard_True);
+    reader.SetGDTMode(Standard_True);
+    reader.SetPropsMode(Standard_True);
 
     IFSelect_ReturnStatus stat = reader.ReadFile(stepFile.c_str());
     if (stat != IFSelect_RetDone) {
@@ -659,6 +1451,14 @@ bool StepParser::Load(const std::string& stepFile, ModelData& outModel) {
 
     Handle(XCAFDoc_ShapeTool) shapeTool =
         XCAFDoc_DocumentTool::ShapeTool(doc->Main());
+    Handle(XCAFDoc_ColorTool) colorTool =
+        XCAFDoc_DocumentTool::ColorTool(doc->Main());
+    Handle(XCAFDoc_MaterialTool) materialTool =
+        XCAFDoc_DocumentTool::MaterialTool(doc->Main());
+    Handle(XCAFDoc_DimTolTool) dimTolTool =
+        XCAFDoc_DocumentTool::DimTolTool(doc->Main());
+    Handle(XCAFDoc_LayerTool) layerTool =
+        XCAFDoc_DocumentTool::LayerTool(doc->Main());
 
     TDF_LabelSequence freeShapes;
     shapeTool->GetFreeShapes(freeShapes);
@@ -672,25 +1472,321 @@ bool StepParser::Load(const std::string& stepFile, ModelData& outModel) {
 
     outModel.root.name = "Root";
     outModel.root.id   = "root";
+    outModel.hierarchyAvailable = true;
 
     for (Standard_Integer i = 1; i <= freeShapes.Length(); ++i) {
-        AssemblyNode child = BuildAssemblyTree(
-            shapeTool,
-            freeShapes.Value(i),
-            gp_Trsf(),
-            outModel
-        );
+        const TDF_Label& rootLabel = freeShapes.Value(i);
+
+        bool detectedHierarchy = TreeHasRealStructure(shapeTool, rootLabel);
+        bool useHierarchyPath = detectedHierarchy;
+        bool wasForced = false;
+
+        if (mode == HierarchyMode::ForceHierarchy && !detectedHierarchy) {
+            useHierarchyPath = true;
+            wasForced = true;
+        } else if (mode == HierarchyMode::ForceFlat && detectedHierarchy) {
+            useHierarchyPath = false;
+            wasForced = true;
+        }
+
+        std::string rootId = LabelToString(rootLabel);
+        std::string rootName;
+        Handle(TDataStd_Name) nameAttr;
+        if (rootLabel.FindAttribute(TDataStd_Name::GetID(), nameAttr)) {
+            rootName = TCollection_AsciiString(nameAttr->Get()).ToCString();
+        }
+
+        Logger::Info("Root shape " + std::to_string(i) + "/" +
+                     std::to_string(freeShapes.Length()) + " (\"" +
+                     (rootName.empty() ? rootId : rootName) + "\"): " +
+                     (useHierarchyPath ? "HIERARCHY path" : "GEOMETRY-SPLIT path") +
+                     (wasForced ? " [forced]" : " [auto-detected]"));
+
+        AssemblyNode child;
+        if (useHierarchyPath) {
+            child = BuildAssemblyTree(reader, shapeTool, colorTool, materialTool, layerTool,
+                                       rootLabel, gp_Trsf(), outModel);
+        } else {
+            TopoDS_Shape shape = shapeTool->GetShape(rootLabel);
+            child = BuildFromGeometrySplit(shape, colorTool, layerTool, outModel);
+        }
         outModel.root.children.push_back(child);
+
+        RootShapeInfo report;
+        report.rootId = rootId;
+        report.rootName = rootName.empty() ? rootId : rootName;
+        report.hierarchyAvailable = useHierarchyPath;
+        report.wasForced = wasForced;
+        outModel.rootReports.push_back(report);
+
+        if (!useHierarchyPath) outModel.hierarchyAvailable = false;
     }
+
+    ExtractPmi(dimTolTool, outModel);
 
     Logger::Info("Parsing complete.");
     Logger::Info("  Parts:         " + std::to_string(outModel.parts.size()));
     Logger::Info("  Unique meshes: " + std::to_string(outModel.uniqueMeshes.size()));
+    for (const auto& r : outModel.rootReports) {
+        Logger::Info("  Root \"" + r.rootName + "\": " +
+                     (r.hierarchyAvailable ? "hierarchy" : "geometry-split") +
+                     (r.wasForced ? " (forced)" : ""));
+    }
+    if (!outModel.pmi.empty()) {
+        Logger::Info("  PMI entries:   " + std::to_string(outModel.pmi.size()));
+    }
     return true;
 }
 
+bool StepParser::TreeHasRealStructure(const Handle(XCAFDoc_ShapeTool)& shapeTool,
+                                       const TDF_Label& label) const {
+    if (shapeTool->IsAssembly(label)) {
+        TDF_LabelSequence components;
+        shapeTool->GetComponents(label, components, Standard_False);
+        if (components.Length() > 0) return true;
+        Logger::Warning("Label flagged as assembly but has 0 components — treating as flat.");
+        return false;
+    }
+    if (shapeTool->IsComponent(label)) return true;
+
+    TDF_Label referred;
+    if (XCAFDoc_ShapeTool::GetReferredShape(label, referred)) {
+        return TreeHasRealStructure(shapeTool, referred);
+    }
+    return false;
+}
+
+void StepParser::ExtractColor(const Handle(XCAFDoc_ColorTool)& colorTool,
+                               const TDF_Label& label, ColorInfo& outColor) const {
+    if (colorTool.IsNull()) return;
+    Quantity_Color col;
+    if (colorTool->GetColor(label, XCAFDoc_ColorSurf, col) ||
+        colorTool->GetColor(label, XCAFDoc_ColorGen, col) ||
+        colorTool->GetColor(label, XCAFDoc_ColorCurv, col)) {
+        outColor.hasColor = true;
+        outColor.r = (float)col.Red();
+        outColor.g = (float)col.Green();
+        outColor.b = (float)col.Blue();
+    }
+}
+
+void StepParser::ExtractMaterial(const Handle(XCAFDoc_MaterialTool)& materialTool,
+                                  const TDF_Label& label, MaterialInfo& outMaterial) const {
+    if (materialTool.IsNull()) return;
+    Handle(TCollection_HAsciiString) name, desc, densName, densValType;
+    Standard_Real density = 0.0;
+    if (materialTool->GetMaterial(label, name, desc, density, densName, densValType)) {
+        if (!name.IsNull() && name->Length() > 0) {
+            outMaterial.hasMaterial = true;
+            outMaterial.name = name->ToCString();
+            if (!desc.IsNull())     outMaterial.description     = desc->ToCString();
+            if (!densName.IsNull()) outMaterial.densityUnitName = densName->ToCString();
+            outMaterial.density = density;
+        }
+    }
+}
+
+void StepParser::ExtractValidationProps(const TDF_Label& label, ValidationProps& outProps) const {
+    Handle(XCAFDoc_Area) areaAttr;
+    if (label.FindAttribute(XCAFDoc_Area::GetID(), areaAttr)) {
+        outProps.hasArea = true;
+        outProps.area = areaAttr->Get();
+    }
+    Handle(XCAFDoc_Volume) volAttr;
+    if (label.FindAttribute(XCAFDoc_Volume::GetID(), volAttr)) {
+        outProps.hasVolume = true;
+        outProps.volume = volAttr->Get();
+    }
+    Handle(XCAFDoc_Centroid) centAttr;
+    if (label.FindAttribute(XCAFDoc_Centroid::GetID(), centAttr)) {
+        outProps.hasCentroid = true;
+        gp_Pnt p = centAttr->Get();
+        outProps.centroid[0] = p.X();
+        outProps.centroid[1] = p.Y();
+        outProps.centroid[2] = p.Z();
+    }
+}
+
+void StepParser::ExtractLayers(const Handle(XCAFDoc_LayerTool)& layerTool,
+                                const TDF_Label& label, std::vector<std::string>& outLayers) const {
+    if (layerTool.IsNull()) return;
+    TDF_LabelSequence layerLabels;
+    layerTool->GetLayers(label, layerLabels);
+    for (Standard_Integer i = 1; i <= layerLabels.Length(); ++i) {
+        Handle(TDataStd_Name) nameAttr;
+        if (layerLabels.Value(i).FindAttribute(TDataStd_Name::GetID(), nameAttr)) {
+            outLayers.push_back(TCollection_AsciiString(nameAttr->Get()).ToCString());
+        }
+    }
+}
+
+void StepParser::ExtractPmi(const Handle(XCAFDoc_DimTolTool)& dimTolTool, ModelData& model) const {
+    if (dimTolTool.IsNull()) return;
+    TDF_LabelSequence dimTolLabels;
+    dimTolTool->GetDimTolLabels(dimTolLabels);
+    if (dimTolLabels.Length() == 0) return;
+
+    Logger::Info("PMI/GD&T entities found: " + std::to_string(dimTolLabels.Length()));
+
+    for (Standard_Integer i = 1; i <= dimTolLabels.Length(); ++i) {
+        const TDF_Label& dtLabel = dimTolLabels.Value(i);
+        PmiEntry entry;
+
+        Handle(TDataStd_Name) nameAttr;
+        if (dtLabel.FindAttribute(TDataStd_Name::GetID(), nameAttr)) {
+            entry.text = TCollection_AsciiString(nameAttr->Get()).ToCString();
+        }
+
+        Handle(XCAFDoc_Dimension) dimAttr;
+        Handle(XCAFDoc_GeomTolerance) tolAttr;
+        if (dtLabel.FindAttribute(XCAFDoc_Dimension::GetID(), dimAttr)) {
+            entry.kind = "Dimension";
+        } else if (dtLabel.FindAttribute(XCAFDoc_GeomTolerance::GetID(), tolAttr)) {
+            entry.kind = "GeometricTolerance";
+        } else {
+            entry.kind = "Datum";
+        }
+        model.pmi.push_back(entry);
+    }
+}
+
+AssemblyNode StepParser::BuildFromGeometrySplit(
+    const TopoDS_Shape& shape,
+    const Handle(XCAFDoc_ColorTool)& colorTool,
+    const Handle(XCAFDoc_LayerTool)& layerTool,
+    ModelData& model)
+{
+    Logger::Warning("No assembly structure found — falling back to geometry split "
+                     "by disjoint solids, with face-level color/layer splitting "
+                     "for any solid that turns out to be internally fused.");
+
+    AssemblyNode container;
+    container.id = "geomsplit_root";
+    container.name = "Ungrouped Solids (no source hierarchy)";
+
+    int solidIndex = 0;
+    TopExp_Explorer solidExp(shape, TopAbs_SOLID);
+    for (; solidExp.More(); solidExp.Next(), ++solidIndex) {
+        const TopoDS_Shape& solid = solidExp.Current();
+
+        auto faceGroups = SplitByFaceStyling(solid, colorTool, layerTool);
+
+        if (faceGroups.size() <= 1) {
+            // No internal styling distinction found — same as the original
+            // behavior: treat the whole solid as one part.
+            ColorInfo color;
+            if (!faceGroups.empty()) {
+                color = faceGroups[0].color;
+            } else if (!colorTool.IsNull()) {
+                Quantity_Color col;
+                if (colorTool->GetColor(solid, XCAFDoc_ColorSurf, col)) {
+                    color.hasColor = true;
+                    color.r = (float)col.Red();
+                    color.g = (float)col.Green();
+                    color.b = (float)col.Blue();
+                }
+            }
+
+            std::string colorTag = color.hasColor
+                ? ("_c" + std::to_string((int)(color.r * 255)) + "-" +
+                          std::to_string((int)(color.g * 255)) + "-" +
+                          std::to_string((int)(color.b * 255)))
+                : "";
+
+            AssemblyNode node;
+            node.id = "solid_" + std::to_string(solidIndex);
+            node.isPart = true;
+            node.name = "Part_" + std::to_string(solidIndex) + colorTag;
+
+            std::string cacheKey = "geomsplit_" + std::to_string(solidIndex);
+            size_t meshIdx = MeshConverter::ConvertAndCache(solid, cacheKey, model);
+
+            PartNode part;
+            part.id = node.id;
+            part.name = node.name;
+            part.meshIndex = meshIdx;
+            part.instanceCount = 1;
+            part.color = color;
+            part.hasGeometry = true;
+
+            node.partIndex = model.parts.size();
+            model.parts.push_back(part);
+            model.partIndexCache[cacheKey] = node.partIndex;
+            container.children.push_back(node);
+
+        } else {
+            // Internal color/layer boundaries found within a fused solid —
+            // split into separately selectable regions. NOTE: these sub-parts
+            // are open face shells, not closed solids — fine for mesh/GLB
+            // selection purposes, but don't expect meaningful volume/mass if
+            // you ever compute validation properties on them.
+            Logger::Info("Solid " + std::to_string(solidIndex) + " has " +
+                         std::to_string(faceGroups.size()) +
+                         " internally distinct styled regions — splitting.");
+
+            for (size_t g = 0; g < faceGroups.size(); ++g) {
+                const auto& fg = faceGroups[g];
+
+                std::string colorTag = fg.color.hasColor
+                    ? ("_c" + std::to_string((int)(fg.color.r * 255)) + "-" +
+                              std::to_string((int)(fg.color.g * 255)) + "-" +
+                              std::to_string((int)(fg.color.b * 255)))
+                    : "";
+                std::string layerTag = !fg.layerTag.empty() ? ("_L-" + fg.layerTag) : "";
+
+                AssemblyNode node;
+                node.id = "solid_" + std::to_string(solidIndex) + "_region_" + std::to_string(g);
+                node.isPart = true;
+                node.name = "Part_" + std::to_string(solidIndex) + "_" +
+                            std::to_string(g) + colorTag + layerTag;
+
+                std::string cacheKey = "geomsplit_" + std::to_string(solidIndex) +
+                                        "_" + std::to_string(g);
+                size_t meshIdx = MeshConverter::ConvertAndCache(fg.shape, cacheKey, model);
+
+                PartNode part;
+                part.id = node.id;
+                part.name = node.name;
+                part.meshIndex = meshIdx;
+                part.instanceCount = 1;
+                part.color = fg.color;
+                part.hasGeometry = true;
+                if (!fg.layerTag.empty()) part.layers.push_back(fg.layerTag);
+
+                node.partIndex = model.parts.size();
+                model.parts.push_back(part);
+                model.partIndexCache[cacheKey] = node.partIndex;
+                container.children.push_back(node);
+            }
+        }
+    }
+
+    if (solidIndex == 0) {
+        Logger::Warning("No individual SOLIDs found either — treating entire shape as one part.");
+        AssemblyNode node;
+        node.id = "solid_0";
+        node.isPart = true;
+        node.name = "Part_0";
+        std::string cacheKey = "geomsplit_0";
+        size_t meshIdx = MeshConverter::ConvertAndCache(shape, cacheKey, model);
+        PartNode part;
+        part.id = node.id; part.name = node.name; part.meshIndex = meshIdx;
+        part.hasGeometry = true;
+        node.partIndex = model.parts.size();
+        model.parts.push_back(part);
+        model.partIndexCache[cacheKey] = node.partIndex;
+        container.children.push_back(node);
+    }
+
+    return container;
+}
+
 AssemblyNode StepParser::BuildAssemblyTree(
+    STEPCAFControl_Reader& reader,
     const Handle(XCAFDoc_ShapeTool)& shapeTool,
+    const Handle(XCAFDoc_ColorTool)& colorTool,
+    const Handle(XCAFDoc_MaterialTool)& materialTool,
+    const Handle(XCAFDoc_LayerTool)& layerTool,
     const TDF_Label& label,
     const gp_Trsf& parentTransform,
     ModelData& model)
@@ -698,46 +1794,36 @@ AssemblyNode StepParser::BuildAssemblyTree(
     AssemblyNode node;
     node.id = LabelToString(label);
 
-    // Get name
     Handle(TDataStd_Name) nameAttr;
     if (label.FindAttribute(TDataStd_Name::GetID(), nameAttr)) {
         node.name = TCollection_AsciiString(nameAttr->Get()).ToCString();
     }
     if (node.name.empty()) node.name = "Part_" + node.id;
 
-    // Get transform
     TopLoc_Location loc = shapeTool->GetLocation(label);
     node.transform = loc.IsIdentity() ? gp_Trsf() : loc.Transformation();
 
     if (shapeTool->IsAssembly(label)) {
-        // --- ASSEMBLY NODE ---
         TDF_LabelSequence components;
         shapeTool->GetComponents(label, components, Standard_False);
 
         for (Standard_Integer i = 1; i <= components.Length(); ++i) {
             TDF_Label compLabel = components.Value(i);
-
-            // Get instance placement transform
             TopLoc_Location compLoc = shapeTool->GetLocation(compLabel);
             gp_Trsf compTrsf = compLoc.IsIdentity() ? gp_Trsf() : compLoc.Transformation();
 
-            // Resolve reference to actual shape
             TDF_Label referred;
             TDF_Label targetLabel = compLabel;
-
             if (XCAFDoc_ShapeTool::GetReferredShape(compLabel, referred)) {
                 targetLabel = referred;
             }
 
-            // Recurse
             AssemblyNode child = BuildAssemblyTree(
-                shapeTool, targetLabel, compTrsf, model
+                reader, shapeTool, colorTool, materialTool, layerTool,
+                targetLabel, compTrsf, model
             );
-
-            // Always use the INSTANCE transform, not the prototype's
             child.transform = compTrsf;
 
-            // Use component label name if child has no name
             if (child.name.empty() || child.name.substr(0, 5) == "Part_") {
                 Handle(TDataStd_Name) compName;
                 if (compLabel.FindAttribute(TDataStd_Name::GetID(), compName)) {
@@ -745,26 +1831,65 @@ AssemblyNode StepParser::BuildAssemblyTree(
                 }
             }
 
+            if (child.isPart && child.partIndex < model.parts.size()) {
+                PartNode& partRef = model.parts[child.partIndex];
+                if (!partRef.color.hasColor) {
+                    ExtractColor(colorTool, compLabel, partRef.color);
+                }
+            }
+
             node.children.push_back(child);
         }
 
     } else {
-        // --- LEAF PART ---
         node.isPart = true;
         TopoDS_Shape shape = shapeTool->GetShape(label);
+        std::string cacheKey = LabelToString(label);
 
         if (shape.IsNull()) {
-            Logger::Warning("Null shape: " + node.name);
+            Logger::Info("No geometry for BOM-only item: " + node.name);
+            PartNode part;
+            part.id = node.id;
+            part.name = node.name;
+            part.hasGeometry = false;
+            node.partIndex = model.parts.size();
+            model.parts.push_back(part);
             return node;
         }
 
-        // Use label entry as unique part ID for caching
-        // This preserves instancing — same label = same mesh
-        std::string cacheKey = LabelToString(label);
+        auto existing = model.partIndexCache.find(cacheKey);
+        if (existing != model.partIndexCache.end()) {
+            size_t idx = existing->second;
+            model.parts[idx].instanceCount++;
+            node.partIndex = idx;
+            MeshConverter::ConvertAndCache(shape, cacheKey, model);
+            return node;
+        }
 
         size_t meshIdx = MeshConverter::ConvertAndCache(shape, cacheKey, model);
-        node.partIndex = model.parts.size();
-        model.parts.push_back({node.id, node.name, meshIdx, 1});
+
+        PartNode part;
+        part.id = node.id;
+        part.name = node.name;
+        part.meshIndex = meshIdx;
+        part.instanceCount = 1;
+        part.hasGeometry = true;
+
+        ExtractColor(colorTool, label, part.color);
+        ExtractMaterial(materialTool, label, part.material);
+        ExtractValidationProps(label, part.validation);
+        ExtractLayers(layerTool, label, part.layers);
+
+        ProductInfo prodInfo = StepEntityExtractor::GetProductInfo(reader, shape);
+        if (prodInfo.found) {
+            part.partNumber = prodInfo.partNumber;
+            part.descriptionText = prodInfo.description;
+        }
+
+        size_t newIdx = model.parts.size();
+        model.parts.push_back(part);
+        model.partIndexCache[cacheKey] = newIdx;
+        node.partIndex = newIdx;
     }
 
     return node;
@@ -785,23 +1910,79 @@ FILE: core\step_parser.h
 #pragma once
 #include "data_model.h"
 #include <string>
+#include <vector>
 #include <XCAFDoc_ShapeTool.hxx>
+#include <XCAFDoc_ColorTool.hxx>
+#include <XCAFDoc_MaterialTool.hxx>
+#include <XCAFDoc_DimTolTool.hxx>
+#include <XCAFDoc_LayerTool.hxx>
+#include <STEPCAFControl_Reader.hxx>
 #include <TDF_Label.hxx>
+#include <TopoDS_Shape.hxx>
 #include <gp_Trsf.hxx>
 
 class StepParser {
 public:
-    bool Load(const std::string& stepFile, ModelData& outModel);
+    bool Load(const std::string& stepFile, ModelData& outModel,
+              HierarchyMode mode = HierarchyMode::Auto);
 
 private:
     AssemblyNode BuildAssemblyTree(
+        STEPCAFControl_Reader& reader,
         const Handle(XCAFDoc_ShapeTool)& shapeTool,
+        const Handle(XCAFDoc_ColorTool)& colorTool,
+        const Handle(XCAFDoc_MaterialTool)& materialTool,
+        const Handle(XCAFDoc_LayerTool)& layerTool,
         const TDF_Label& label,
         const gp_Trsf& parentTransform,
         ModelData& model
     );
+
+    AssemblyNode BuildFromGeometrySplit(
+        const TopoDS_Shape& shape,
+        const Handle(XCAFDoc_ColorTool)& colorTool,
+        const Handle(XCAFDoc_LayerTool)& layerTool,   // NEW
+        ModelData& model
+    );
+
+    bool TreeHasRealStructure(const Handle(XCAFDoc_ShapeTool)& shapeTool,
+                               const TDF_Label& label) const;
+
+    void ExtractColor(const Handle(XCAFDoc_ColorTool)& colorTool,
+                       const TDF_Label& label, ColorInfo& outColor) const;
+
+    void ExtractMaterial(const Handle(XCAFDoc_MaterialTool)& materialTool,
+                          const TDF_Label& label, MaterialInfo& outMaterial) const;
+
+    void ExtractValidationProps(const TDF_Label& label, ValidationProps& outProps) const;
+
+    void ExtractLayers(const Handle(XCAFDoc_LayerTool)& layerTool,
+                        const TDF_Label& label, std::vector<std::string>& outLayers) const;
+
+    void ExtractPmi(const Handle(XCAFDoc_DimTolTool)& dimTolTool, ModelData& model) const;
+
     int CountNodes(const AssemblyNode& node) const;
+
+
+    struct FaceGroup {
+        TopoDS_Shape shape;   // compound of faces sharing this color/layer signature
+        ColorInfo color;
+        std::string layerTag;
+    };
+
+    // Groups a single solid's faces by their individually-assigned color/layer.
+    // Returns one group if the solid has no internal styling distinction
+    // (i.e. current behavior — treat the whole solid as one part). Returns
+    // multiple groups when the solid was Boolean-fused from originally
+    // distinct, differently-styled parts.
+    std::vector<FaceGroup> SplitByFaceStyling(
+        const TopoDS_Shape& solid,
+        const Handle(XCAFDoc_ColorTool)& colorTool,
+        const Handle(XCAFDoc_LayerTool)& layerTool
+    ) const;
 };
+
+
 
 
 ================================================================================
@@ -815,6 +1996,13 @@ FILE: export\glb_exporter.cpp
 #include <gp_Mat.hxx>
 #include <functional>
 
+// glTF/GLB requires meters. OCCT's STEP reader normalizes all imported
+// geometry to millimeters internally regardless of the source file's
+// declared unit — so every position and translation must be scaled down
+// by this factor before export, or models come out 1000x too large in any
+// spec-compliant viewer.
+static constexpr double MM_TO_M = 0.001;
+
 bool GlbExporter::Export(const ModelData& model, const std::string& glbPath) {
     Logger::Info("Starting GLB export: " + glbPath);
 
@@ -822,57 +2010,57 @@ bool GlbExporter::Export(const ModelData& model, const std::string& glbPath) {
     gltf.asset.version   = "2.0";
     gltf.asset.generator = "CAD_STEP_to_GLB";
 
-    // Single buffer — all data packed here
     tinygltf::Buffer buffer;
 
-    // Helper: append raw bytes to buffer, return byte offset where data starts
     auto appendToBuffer = [&](const void* data, size_t byteSize) -> size_t {
         size_t offset = buffer.data.size();
         const unsigned char* ptr = reinterpret_cast<const unsigned char*>(data);
         buffer.data.insert(buffer.data.end(), ptr, ptr + byteSize);
-        // Pad to 4-byte alignment
         while (buffer.data.size() % 4 != 0)
             buffer.data.push_back(0);
         return offset;
     };
 
-    // Build all meshes and pack data into buffer
     for (const auto& m : model.uniqueMeshes) {
         tinygltf::Mesh gltfMesh;
         tinygltf::Primitive primitive;
 
-        // --- POSITIONS ---
+        // --- POSITIONS (scaled mm -> m) ---
         {
+            std::vector<float> scaledVerts(m.vertices.size());
+            for (size_t i = 0; i < m.vertices.size(); ++i) {
+                scaledVerts[i] = (float)(m.vertices[i] * MM_TO_M);
+            }
+
             size_t byteOffset = appendToBuffer(
-                m.vertices.data(),
-                m.vertices.size() * sizeof(float)
+                scaledVerts.data(),
+                scaledVerts.size() * sizeof(float)
             );
 
             tinygltf::BufferView bv;
             bv.buffer     = 0;
             bv.byteOffset = byteOffset;
-            bv.byteLength = m.vertices.size() * sizeof(float);
+            bv.byteLength = scaledVerts.size() * sizeof(float);
             bv.target     = TINYGLTF_TARGET_ARRAY_BUFFER;
             int bvIdx = (int)gltf.bufferViews.size();
             gltf.bufferViews.push_back(bv);
 
-            // Compute min/max for accessor (required by spec)
             std::vector<double> minPos = { DBL_MAX,  DBL_MAX,  DBL_MAX};
             std::vector<double> maxPos = {-DBL_MAX, -DBL_MAX, -DBL_MAX};
-            for (size_t i = 0; i + 2 < m.vertices.size(); i += 3) {
-                minPos[0] = std::min(minPos[0], (double)m.vertices[i]);
-                minPos[1] = std::min(minPos[1], (double)m.vertices[i+1]);
-                minPos[2] = std::min(minPos[2], (double)m.vertices[i+2]);
-                maxPos[0] = std::max(maxPos[0], (double)m.vertices[i]);
-                maxPos[1] = std::max(maxPos[1], (double)m.vertices[i+1]);
-                maxPos[2] = std::max(maxPos[2], (double)m.vertices[i+2]);
+            for (size_t i = 0; i + 2 < scaledVerts.size(); i += 3) {
+                minPos[0] = std::min(minPos[0], (double)scaledVerts[i]);
+                minPos[1] = std::min(minPos[1], (double)scaledVerts[i+1]);
+                minPos[2] = std::min(minPos[2], (double)scaledVerts[i+2]);
+                maxPos[0] = std::max(maxPos[0], (double)scaledVerts[i]);
+                maxPos[1] = std::max(maxPos[1], (double)scaledVerts[i+1]);
+                maxPos[2] = std::max(maxPos[2], (double)scaledVerts[i+2]);
             }
 
             tinygltf::Accessor acc;
             acc.bufferView    = bvIdx;
             acc.byteOffset    = 0;
             acc.componentType = TINYGLTF_COMPONENT_TYPE_FLOAT;
-            acc.count         = m.vertices.size() / 3;
+            acc.count         = scaledVerts.size() / 3;
             acc.type          = TINYGLTF_TYPE_VEC3;
             acc.minValues     = minPos;
             acc.maxValues     = maxPos;
@@ -880,7 +2068,7 @@ bool GlbExporter::Export(const ModelData& model, const std::string& glbPath) {
             gltf.accessors.push_back(acc);
         }
 
-        // --- NORMALS ---
+        // --- NORMALS (unaffected by scale) ---
         if (!m.normals.empty()) {
             size_t byteOffset = appendToBuffer(
                 m.normals.data(),
@@ -935,10 +2123,8 @@ bool GlbExporter::Export(const ModelData& model, const std::string& glbPath) {
         gltf.meshes.push_back(gltfMesh);
     }
 
-    // Finalize buffer
     gltf.buffers.push_back(buffer);
 
-    // Build node hierarchy recursively
     std::vector<tinygltf::Node> nodes;
 
     std::function<int(const AssemblyNode&)> buildNode =
@@ -947,17 +2133,17 @@ bool GlbExporter::Export(const ModelData& model, const std::string& glbPath) {
         tinygltf::Node gltfNode;
         gltfNode.name = node.name.empty() ? ("Node_" + node.id) : node.name;
 
-        // Set transform matrix
         std::array<double, 16> matrix{};
         ConvertTransform(node.transform, matrix);
         gltfNode.matrix = std::vector<double>(matrix.begin(), matrix.end());
 
-        // Assign mesh if this is a leaf part
-        if (node.isPart && node.partIndex < model.parts.size()) {
+        // Only attach a mesh if this part actually has geometry — BOM-only
+        // items (consumables, placeholders) stay as named nodes with no mesh.
+        if (node.isPart && node.partIndex < model.parts.size() &&
+            model.parts[node.partIndex].hasGeometry) {
             gltfNode.mesh = (int)model.parts[node.partIndex].meshIndex;
         }
 
-        // Recurse children
         for (const auto& child : node.children) {
             int childIdx = buildNode(child);
             gltfNode.children.push_back(childIdx);
@@ -971,14 +2157,12 @@ bool GlbExporter::Export(const ModelData& model, const std::string& glbPath) {
     int rootIdx = buildNode(model.root);
     gltf.nodes = std::move(nodes);
 
-    // Scene
     tinygltf::Scene scene;
     scene.name = "Scene";
     scene.nodes.push_back(rootIdx);
     gltf.scenes.push_back(scene);
     gltf.defaultScene = 0;
 
-    // Write GLB
     tinygltf::TinyGLTF writer;
     bool success = writer.WriteGltfSceneToFile(
         &gltf, glbPath,
@@ -997,12 +2181,13 @@ void GlbExporter::ConvertTransform(const gp_Trsf& trsf,
     const gp_Mat& mat = trsf.VectorialPart();
     gp_XYZ trans      = trsf.TranslationPart();
 
-    // glTF uses column-major matrices
+    // Translation is in mm from OCCT — scale to meters. Rotation/scale part
+    // of the matrix is dimensionless, unaffected.
     matrix = {
         mat(1,1), mat(2,1), mat(3,1), 0.0,
         mat(1,2), mat(2,2), mat(3,2), 0.0,
         mat(1,3), mat(2,3), mat(3,3), 0.0,
-        trans.X(), trans.Y(), trans.Z(), 1.0
+        trans.X() * MM_TO_M, trans.Y() * MM_TO_M, trans.Z() * MM_TO_M, 1.0
     };
 }
 
@@ -1036,26 +2221,99 @@ FILE: export\json_exporter.cpp
 
 using json = nlohmann::json;
 
+static json ColorToJson(const ColorInfo& c) {
+    if (!c.hasColor) return nullptr;
+    return json{{"r", c.r}, {"g", c.g}, {"b", c.b}};
+}
+
+static json MaterialToJson(const MaterialInfo& m) {
+    if (!m.hasMaterial) return nullptr;
+    json j;
+    j["name"] = m.name;
+    if (!m.description.empty()) j["description"] = m.description;
+    if (m.density > 0.0) {
+        j["density"] = m.density;
+        if (!m.densityUnitName.empty()) j["densityUnit"] = m.densityUnitName;
+    }
+    return j;
+}
+
+static json ValidationToJson(const ValidationProps& v) {
+    if (!v.hasArea && !v.hasVolume && !v.hasCentroid) return nullptr;
+    json j;
+    if (v.hasArea)     j["area"] = v.area;
+    if (v.hasVolume)   j["volume"] = v.volume;
+    if (v.hasCentroid) j["centroid"] = {v.centroid[0], v.centroid[1], v.centroid[2]};
+    return j;
+}
+
+static json MetadataToJson(const DocumentMetadata& m) {
+    json j;
+    if (!m.originalFileName.empty())    j["originalFileName"] = m.originalFileName;
+    if (!m.timestamp.empty())           j["timestamp"] = m.timestamp;
+    if (!m.author.empty())              j["author"] = m.author;
+    if (!m.organization.empty())        j["organization"] = m.organization;
+    if (!m.originatingSystem.empty())   j["originatingSystem"] = m.originatingSystem;
+    if (!m.preprocessorVersion.empty()) j["preprocessorVersion"] = m.preprocessorVersion;
+    if (!m.schema.empty())              j["schema"] = m.schema;
+    if (!m.descriptionNotes.empty())    j["notes"] = m.descriptionNotes;
+    return j;
+}
+
 bool JsonExporter::Export(const ModelData& model, const std::string& jsonPath) {
     Logger::Info("Exporting JSON assembly tree and BOM: " + jsonPath);
 
     json j;
     j["name"] = "CAD Assembly";
+    j["document"] = MetadataToJson(model.documentMetadata); 
     j["total_parts"] = model.parts.size();
     j["unique_meshes"] = model.uniqueMeshes.size();
+    j["hierarchy_available"] = model.hierarchyAvailable;
+    if (!model.hierarchyAvailable) {
+        j["note"] = "Source STEP file had no usable assembly structure for "
+                     "at least one root shape. See root_shapes for per-root "
+                     "detail — affected parts were derived by splitting "
+                     "disjoint solid bodies and grouping by outer-surface "
+                     "color, not by the original product hierarchy.";
+    }
 
-    // Assembly Tree
+    json rootReports = json::array();
+    for (const auto& r : model.rootReports) {
+        json rr;
+        rr["name"] = r.rootName;
+        rr["hierarchyAvailable"] = r.hierarchyAvailable;
+        rr["wasForced"] = r.wasForced;
+        rootReports.push_back(rr);
+    }
+    j["root_shapes"] = rootReports;
+
     json tree;
-    std::function<void(const AssemblyNode&, json&)> buildTree = 
+    std::function<void(const AssemblyNode&, json&)> buildTree =
         [&](const AssemblyNode& node, json& jnode) {
             jnode["id"] = node.id;
             jnode["name"] = node.name;
             jnode["isPart"] = node.isPart;
-            
+
             if (node.isPart && node.partIndex < model.parts.size()) {
                 const auto& part = model.parts[node.partIndex];
-                jnode["meshIndex"] = part.meshIndex;
+                jnode["hasGeometry"] = part.hasGeometry;
+                if (part.hasGeometry) {
+                    jnode["meshIndex"] = part.meshIndex;
+                }
                 jnode["instanceCount"] = part.instanceCount;
+
+                json color = ColorToJson(part.color);
+                if (!color.is_null()) jnode["color"] = color;
+
+                json material = MaterialToJson(part.material);
+                if (!material.is_null()) jnode["material"] = material;
+
+                json validation = ValidationToJson(part.validation);
+                if (!validation.is_null()) jnode["validationProperties"] = validation;
+
+                if (!part.partNumber.empty())      jnode["partNumber"] = part.partNumber;
+                if (!part.descriptionText.empty())  jnode["description"] = part.descriptionText;
+                if (!part.layers.empty())           jnode["layers"] = part.layers;
             }
 
             if (!node.children.empty()) {
@@ -1071,21 +2329,50 @@ bool JsonExporter::Export(const ModelData& model, const std::string& jsonPath) {
     buildTree(model.root, tree);
     j["assembly_tree"] = tree;
 
-    // Simple BOM (Bill of Materials)
     json bom = json::array();
     for (const auto& part : model.parts) {
         json item;
         item["id"] = part.id;
         item["name"] = part.name;
         item["instances"] = part.instanceCount;
-        item["meshIndex"] = part.meshIndex;
+        item["hasGeometry"] = part.hasGeometry;
+        if (part.hasGeometry) {
+            item["meshIndex"] = part.meshIndex;
+        }
+
+        json color = ColorToJson(part.color);
+        if (!color.is_null()) item["color"] = color;
+
+        json material = MaterialToJson(part.material);
+        if (!material.is_null()) item["material"] = material;
+
+        json validation = ValidationToJson(part.validation);
+        
+        if (!validation.is_null()) item["validationProperties"] = validation;
+        if (!part.partNumber.empty())      item["partNumber"] = part.partNumber;
+        if (!part.descriptionText.empty())  item["description"] = part.descriptionText;
+        if (!part.layers.empty())           item["layers"] = part.layers;
+
         bom.push_back(item);
     }
     j["bom"] = bom;
 
+    if (!model.pmi.empty()) {
+        json pmiArray = json::array();
+        for (const auto& p : model.pmi) {
+            json pj;
+            pj["kind"] = p.kind;
+            if (!p.text.empty()) pj["text"] = p.text;
+            if (p.hasValue) pj["value"] = p.value;
+            if (!p.refPartIds.empty()) pj["refParts"] = p.refPartIds;
+            pmiArray.push_back(pj);
+        }
+        j["pmi"] = pmiArray;
+    }
+
     std::ofstream file(jsonPath);
     if (file.is_open()) {
-        file << j.dump(4);   // pretty print with 4 spaces
+        file << j.dump(4);
         file.close();
         Logger::Info("JSON export successful");
         return true;
