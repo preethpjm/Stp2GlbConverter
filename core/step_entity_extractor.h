@@ -1,8 +1,8 @@
 #pragma once
 #include <string>
 #include <TopoDS_Shape.hxx>
+#include <TopoDS_Face.hxx>
 #include <STEPCAFControl_Reader.hxx>
-
 struct ProductInfo {
     bool found = false;
     std::string partNumber;   // STEP PRODUCT.Id() — the real human part number,
@@ -14,7 +14,6 @@ struct ProductInfo {
                                // (POUR SKYDROL)" on an O-ring with no structured
                                // material data)
 };
-
 // Reverse-maps a resulting TopoDS_Shape back to the STEP entity that produced it,
 // then walks the standard AP214/242 chain:
 //   ProductDefinitionShape -> ProductDefinition -> ProductDefinitionFormation -> Product
@@ -28,4 +27,5 @@ struct ProductInfo {
 class StepEntityExtractor {
 public:
     static ProductInfo GetProductInfo(STEPCAFControl_Reader& reader, const TopoDS_Shape& shape);
+    static std::string GetFaceBreadcrumb(STEPCAFControl_Reader& reader, const TopoDS_Face& face);
 };

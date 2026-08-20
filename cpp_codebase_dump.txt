@@ -14,128 +14,6 @@ Build/
     Release/
         cad-step-to-glb.exp
         cad-step-to-glb.lib
-    STP_to_GLB_Release3.2/
-        README.txt
-        TKBO.dll
-        TKBRep.dll
-        TKBin.dll
-        TKBinL.dll
-        TKBinTObj.dll
-        TKBinXCAF.dll
-        TKBool.dll
-        TKCAF.dll
-        TKCDF.dll
-        TKDE.dll
-        TKDECascade.dll
-        TKDEGLTF.dll
-        TKDEIGES.dll
-        TKDEOBJ.dll
-        TKDEPLY.dll
-        TKDESTEP.dll
-        TKDESTL.dll
-        TKDEVRML.dll
-        TKFeat.dll
-        TKFillet.dll
-        TKG2d.dll
-        TKG3d.dll
-        TKGeomAlgo.dll
-        TKGeomBase.dll
-        TKHLR.dll
-        TKLCAF.dll
-        TKMath.dll
-        TKMesh.dll
-        TKMeshVS.dll
-        TKOffset.dll
-        TKOpenGl.dll
-        TKPrim.dll
-        TKRWMesh.dll
-        TKService.dll
-        TKShHealing.dll
-        TKStd.dll
-        TKStdL.dll
-        TKTObj.dll
-        TKTopAlgo.dll
-        TKV3d.dll
-        TKVCAF.dll
-        TKXCAF.dll
-        TKXMesh.dll
-        TKXSBase.dll
-        TKXml.dll
-        TKXmlL.dll
-        TKXmlTObj.dll
-        TKXmlXCAF.dll
-        TKernel.dll
-        VC_redist.x64.exe
-        brotlicommon.dll
-        brotlidec.dll
-        brotlienc.dll
-        bz2.dll
-        cad-step-to-glb.exe
-        convert.bat
-        freetype.dll
-        libpng16.dll
-        zlib1.dll
-    STP_to_GLB_Release3.3/
-        README.txt
-        TKBO.dll
-        TKBRep.dll
-        TKBin.dll
-        TKBinL.dll
-        TKBinTObj.dll
-        TKBinXCAF.dll
-        TKBool.dll
-        TKCAF.dll
-        TKCDF.dll
-        TKDE.dll
-        TKDECascade.dll
-        TKDEGLTF.dll
-        TKDEIGES.dll
-        TKDEOBJ.dll
-        TKDEPLY.dll
-        TKDESTEP.dll
-        TKDESTL.dll
-        TKDEVRML.dll
-        TKFeat.dll
-        TKFillet.dll
-        TKG2d.dll
-        TKG3d.dll
-        TKGeomAlgo.dll
-        TKGeomBase.dll
-        TKHLR.dll
-        TKLCAF.dll
-        TKMath.dll
-        TKMesh.dll
-        TKMeshVS.dll
-        TKOffset.dll
-        TKOpenGl.dll
-        TKPrim.dll
-        TKRWMesh.dll
-        TKService.dll
-        TKShHealing.dll
-        TKStd.dll
-        TKStdL.dll
-        TKTObj.dll
-        TKTopAlgo.dll
-        TKV3d.dll
-        TKVCAF.dll
-        TKXCAF.dll
-        TKXMesh.dll
-        TKXSBase.dll
-        TKXml.dll
-        TKXmlL.dll
-        TKXmlTObj.dll
-        TKXmlXCAF.dll
-        TKernel.dll
-        VC_redist.x64.exe
-        brotlicommon.dll
-        brotlidec.dll
-        brotlienc.dll
-        bz2.dll
-        cad-step-to-glb.exe
-        convert.bat
-        freetype.dll
-        libpng16.dll
-        zlib1.dll
 core/
     data_model.h
     geometry_processor.cpp
@@ -416,19 +294,35 @@ static HierarchyMode ParseMode(const std::string& s) {
     return HierarchyMode::Auto;
 }
 
+static double ParseQuality(const std::string& s) {
+    if (s == "fast")    return 0.003;   // coarser mesh, faster
+    if (s == "precise") return 0.0003;  // finer mesh, slower
+    return 0.001; // "balanced" / default
+}
+
+static int ParseThreshold(const std::string& s) {
+    try { return std::stoi(s); } catch (...) { return 150; }
+}
+
 int main(int argc, char* argv[]) {
     std::string inputFile = (argc > 1) ? argv[1] : "assembly.stp";
     std::string glbOut    = (argc > 2) ? argv[2] : "output.glb";
     std::string jsonOut   = (argc > 3) ? argv[3] : "assembly.json";
     HierarchyMode mode = (argc > 4) ? ParseMode(argv[4]) : HierarchyMode::Auto;
+    double quality = (argc > 5) ? ParseQuality(argv[5]) : 0.001;
+    int breadcrumbThreshold = (argc > 6) ? ParseThreshold(argv[6]) : 150;
 
     std::cout << "=== STEP to GLB Converter ===" << std::endl;
     std::cout << "Input:  " << inputFile << std::endl;
     std::cout << "GLB:    " << glbOut << std::endl;
     std::cout << "JSON:   " << jsonOut << std::endl;
     std::cout << "Mode:   " << (argc > 4 ? argv[4] : "auto") << std::endl;
+    std::cout << "Quality: " << (argc > 5 ? argv[5] : "balanced") << std::endl;
+    std::cout << "Breadcrumb face threshold: " << breadcrumbThreshold << std::endl;
 
     ModelData model;
+    model.meshQualityMultiplier = quality;
+    model.breadcrumbSplitFaceThreshold = breadcrumbThreshold;
     StepParser parser;
 
     std::cout << "\n[1/3] Parsing STEP file..." << std::endl;
@@ -599,190 +493,6 @@ FILE: vcpkg.json
 
 
 ================================================================================
-FILE: Build\STP_to_GLB_Release3.2\README.txt
-================================================================================
-
-STP to GLB Converter
-====================
-
-HOW TO USE
-----------
-
-Option 1 - Drag and Drop (easiest):
-  Drag your .stp file onto convert.bat
-  The .glb and .json will be saved in the same folder as your .stp file.
-
-Option 2 - Command line:
-  convert.bat "path\to\file.stp"
-  convert.bat "path\to\file.stp" "output.glb" "assembly.json"
-  convert.bat "path\to\file.stp" "output.glb" "assembly.json" flat
-
-MODE (optional 4th argument)
------------------------------
-  auto      - (default) auto-detect whether the source has a real assembly
-              hierarchy and use it if so, otherwise fall back to splitting
-              by geometry/color.
-  hierarchy - force the hierarchy path even if detection says otherwise.
-  flat      - force the geometry-split path even if a real hierarchy exists.
-
-OUTPUT FILES
-------------
-  .glb   - 3D mesh, open in Windows 3D Viewer, Blender, online at gltf-viewer.donmccurdy.com
-  .json  - Bill of Materials and assembly tree
-
-NOTES
------
-  All required DLLs are included. No installation needed.
-  Keep all files in this folder together - do not move just the exe.
-  If launching on a machine without the Visual C++ runtime installed,
-  run vc_redist.x64.exe from this folder first (one-time, per machine).
-
-
-
-================================================================================
-FILE: Build\STP_to_GLB_Release3.2\convert.bat
-================================================================================
-
-@echo off
-cd /d "%~dp0"
-
-if "%~1"=="" (
-    echo.
-    echo  STP to GLB Converter
-    echo  --------------------
-    echo  Usage:        convert.bat input.stp [output.glb] [assembly.json] [auto^|hierarchy^|flat]
-    echo  Drag and drop: drag your .stp file onto convert.bat
-    echo.
-    pause
-    exit /b 1
-)
-
-set INPUT=%~1
-set GLB=%~2
-set JSON=%~3
-set MODE=%~4
-
-if "%GLB%"==""  set GLB=%~dpn1.glb
-if "%JSON%"=="" set JSON=%~dpn1_assembly.json
-if "%MODE%"=="" set MODE=auto
-
-echo.
-echo  Input  : %INPUT%
-echo  GLB    : %GLB%
-echo  JSON   : %JSON%
-echo  Mode   : %MODE%   (auto / hierarchy / flat)
-echo.
-
-"%~dp0cad-step-to-glb.exe" "%INPUT%" "%GLB%" "%JSON%" "%MODE%"
-
-if %ERRORLEVEL% NEQ 0 (
-    echo.
-    echo  ERROR: Conversion failed. Check the output above for details.
-) else (
-    echo.
-    echo  Conversion successful!
-    echo  GLB  saved to: %GLB%
-    echo  JSON saved to: %JSON%
-)
-
-echo.
-pause
-
-
-
-================================================================================
-FILE: Build\STP_to_GLB_Release3.3\README.txt
-================================================================================
-
-STP to GLB Converter
-====================
-
-HOW TO USE
-----------
-
-Option 1 - Drag and Drop (easiest):
-  Drag your .stp file onto convert.bat
-  The .glb and .json will be saved in the same folder as your .stp file.
-
-Option 2 - Command line:
-  convert.bat "path\to\file.stp"
-  convert.bat "path\to\file.stp" "output.glb" "assembly.json"
-  convert.bat "path\to\file.stp" "output.glb" "assembly.json" flat
-
-MODE (optional 4th argument)
------------------------------
-  auto      - (default) auto-detect whether the source has a real assembly
-              hierarchy and use it if so, otherwise fall back to splitting
-              by geometry/color.
-  hierarchy - force the hierarchy path even if detection says otherwise.
-  flat      - force the geometry-split path even if a real hierarchy exists.
-
-OUTPUT FILES
-------------
-  .glb   - 3D mesh, open in Windows 3D Viewer, Blender, online at gltf-viewer.donmccurdy.com
-  .json  - Bill of Materials and assembly tree
-
-NOTES
------
-  All required DLLs are included. No installation needed.
-  Keep all files in this folder together - do not move just the exe.
-  If launching on a machine without the Visual C++ runtime installed,
-  run vc_redist.x64.exe from this folder first (one-time, per machine).
-
-
-
-================================================================================
-FILE: Build\STP_to_GLB_Release3.3\convert.bat
-================================================================================
-
-@echo off
-cd /d "%~dp0"
-
-if "%~1"=="" (
-    echo.
-    echo  STP to GLB Converter
-    echo  --------------------
-    echo  Usage:        convert.bat input.stp [output.glb] [assembly.json] [auto^|hierarchy^|flat]
-    echo  Drag and drop: drag your .stp file onto convert.bat
-    echo.
-    pause
-    exit /b 1
-)
-
-set INPUT=%~1
-set GLB=%~2
-set JSON=%~3
-set MODE=%~4
-
-if "%GLB%"==""  set GLB=%~dpn1.glb
-if "%JSON%"=="" set JSON=%~dpn1_assembly.json
-if "%MODE%"=="" set MODE=auto
-
-echo.
-echo  Input  : %INPUT%
-echo  GLB    : %GLB%
-echo  JSON   : %JSON%
-echo  Mode   : %MODE%   (auto / hierarchy / flat)
-echo.
-
-"%~dp0cad-step-to-glb.exe" "%INPUT%" "%GLB%" "%JSON%" "%MODE%"
-
-if %ERRORLEVEL% NEQ 0 (
-    echo.
-    echo  ERROR: Conversion failed. Check the output above for details.
-) else (
-    echo.
-    echo  Conversion successful!
-    echo  GLB  saved to: %GLB%
-    echo  JSON saved to: %JSON%
-)
-
-echo.
-pause
-
-
-
-================================================================================
 FILE: core\data_model.h
 ================================================================================
 
@@ -848,6 +558,7 @@ struct PartNode {
     ColorInfo color;
     MaterialInfo material;
     ValidationProps validation;
+    std::string sourcePath; 
     std::string partNumber;             // NEW — real STEP PRODUCT.Id()
     std::string descriptionText;        // NEW — STEP PRODUCT.Description(), free-text hints
     std::vector<std::string> layers;    // NEW — CAD layer/group assignments, if any
@@ -891,6 +602,7 @@ struct ModelData {
     std::vector<RootShapeInfo> rootReports;
     double meshQualityMultiplier = 0.001;
     DocumentMetadata documentMetadata;  // NEW
+    int breadcrumbSplitFaceThreshold = 150;
 };
 
 
@@ -1107,11 +819,147 @@ FILE: core\step_entity_extractor.cpp
 #include "step_entity_extractor.h"
 #include <XSControl_WorkSession.hxx>
 #include <XSControl_TransferReader.hxx>
+#include <Interface_InterfaceModel.hxx>
+#include <StepShape_ShapeDefinitionRepresentation.hxx>
+#include <StepRepr_Representation.hxx>
+#include <StepRepr_RepresentationItem.hxx>
+#include <StepRepr_HArray1OfRepresentationItem.hxx>
 #include <StepRepr_ProductDefinitionShape.hxx>
+#include <StepRepr_PropertyDefinition.hxx>
+#include <StepRepr_ShapeRepresentationRelationship.hxx>
+#include <StepShape_AdvancedFace.hxx>
 #include <StepBasic_ProductDefinition.hxx>
 #include <StepBasic_ProductDefinitionFormation.hxx>
 #include <StepBasic_Product.hxx>
 #include <TCollection_HAsciiString.hxx>
+#include <TopoDS_Face.hxx>
+#include <Utils/logger.h>
+#include <map>
+#include <memory>
+
+// --- Face breadcrumb lookup (used by SplitLeafByBreadcrumb) --------------
+
+std::string StepEntityExtractor::GetFaceBreadcrumb(STEPCAFControl_Reader& reader, const TopoDS_Face& face) {
+    Handle(XSControl_WorkSession) WS = reader.Reader().WS();
+    if (WS.IsNull()) return "";
+    Handle(XSControl_TransferReader) TR = WS->TransferReader();
+    if (TR.IsNull()) return "";
+
+    Handle(Standard_Transient) ent;
+    for (Standard_Integer mode = 1; mode <= 4 && ent.IsNull(); ++mode) {
+        ent = TR->EntityFromShapeResult(face, mode);
+    }
+    if (ent.IsNull()) return "";
+
+    Handle(StepShape_AdvancedFace) af = Handle(StepShape_AdvancedFace)::DownCast(ent);
+    if (af.IsNull() || af->Name().IsNull()) return "";
+
+    std::string name = af->Name()->ToCString();
+    if (name.empty() || name == " ") return "";
+    return name;
+}
+
+// --- SDR lookup map (used by GetProductInfo) ------------------------------
+
+static Handle(XSControl_WorkSession) s_cachedWS;
+static std::shared_ptr<std::map<Standard_Integer, Handle(StepShape_ShapeDefinitionRepresentation)>> s_cachedMap;
+
+static void CollectItemsRecursive(
+    const Handle(Interface_InterfaceModel)& model,
+    const Handle(StepRepr_Representation)& rep,
+    const Handle(StepShape_ShapeDefinitionRepresentation)& owningSDR,
+    std::map<Standard_Integer, Handle(StepShape_ShapeDefinitionRepresentation)>& outMap,
+    int depth = 0)
+{
+    if (rep.IsNull() || depth > 4) return;
+
+    Standard_Integer repNum = model->Number(rep);
+    if (repNum != 0) outMap[repNum] = owningSDR;
+
+    Handle(StepRepr_HArray1OfRepresentationItem) items = rep->Items();
+    if (items.IsNull()) return;
+
+    for (Standard_Integer i = items->Lower(); i <= items->Upper(); ++i) {
+        Handle(StepRepr_RepresentationItem) item = items->Value(i);
+        if (item.IsNull()) continue;
+
+        Standard_Integer itemNum = model->Number(item);
+        if (itemNum != 0) outMap[itemNum] = owningSDR;
+
+        Handle(StepRepr_Representation) nestedRep = Handle(StepRepr_Representation)::DownCast(item);
+        if (!nestedRep.IsNull()) {
+            CollectItemsRecursive(model, nestedRep, owningSDR, outMap, depth + 1);
+        }
+    }
+}
+
+static void PropagateAcrossRelationships(
+    const Handle(Interface_InterfaceModel)& model,
+    std::map<Standard_Integer, Handle(StepShape_ShapeDefinitionRepresentation)>& outMap)
+{
+    const int maxPasses = 3;
+    for (int pass = 0; pass < maxPasses; ++pass) {
+        bool changed = false;
+        Standard_Integer nb = model->NbEntities();
+
+        for (Standard_Integer i = 1; i <= nb; ++i) {
+            Handle(Standard_Transient) ent = model->Value(i);
+            Handle(StepRepr_ShapeRepresentationRelationship) rel =
+                Handle(StepRepr_ShapeRepresentationRelationship)::DownCast(ent);
+            if (rel.IsNull()) continue;
+
+            Handle(StepRepr_Representation) rep1 = rel->Rep1();
+            Handle(StepRepr_Representation) rep2 = rel->Rep2();
+            if (rep1.IsNull() || rep2.IsNull()) continue;
+
+            Standard_Integer num1 = model->Number(rep1);
+            Standard_Integer num2 = model->Number(rep2);
+
+            auto it1 = outMap.find(num1);
+            auto it2 = outMap.find(num2);
+
+            if (it1 != outMap.end() && it2 == outMap.end()) {
+                CollectItemsRecursive(model, rep2, it1->second, outMap);
+                changed = true;
+            } else if (it2 != outMap.end() && it1 == outMap.end()) {
+                CollectItemsRecursive(model, rep1, it2->second, outMap);
+                changed = true;
+            }
+        }
+        if (!changed) break;
+    }
+}
+
+static std::map<Standard_Integer, Handle(StepShape_ShapeDefinitionRepresentation)>&
+GetOrBuildSDRMap(const Handle(XSControl_WorkSession)& WS) {
+    if (s_cachedWS != WS || !s_cachedMap) {
+        s_cachedMap = std::make_shared<std::map<Standard_Integer, Handle(StepShape_ShapeDefinitionRepresentation)>>();
+        s_cachedWS = WS;
+
+        Handle(Interface_InterfaceModel) model = WS->Model();
+        Standard_Integer nb = model->NbEntities();
+
+        int sdrCount = 0;
+        for (Standard_Integer i = 1; i <= nb; ++i) {
+            Handle(Standard_Transient) ent = model->Value(i);
+            Handle(StepShape_ShapeDefinitionRepresentation) sdr =
+                Handle(StepShape_ShapeDefinitionRepresentation)::DownCast(ent);
+            if (sdr.IsNull()) continue;
+            ++sdrCount;
+
+            Handle(StepRepr_Representation) usedRep = sdr->UsedRepresentation();
+            CollectItemsRecursive(model, usedRep, sdr, *s_cachedMap);
+        }
+
+        PropagateAcrossRelationships(model, *s_cachedMap);
+
+        Logger::Info("Built SDR lookup map: " + std::to_string(sdrCount) +
+                     " ShapeDefinitionRepresentations, " + std::to_string(s_cachedMap->size()) + " mapped geometry entities.");
+    }
+    return *s_cachedMap;
+}
+
+// --- GetProductInfo --------------------------------------------------------
 
 ProductInfo StepEntityExtractor::GetProductInfo(STEPCAFControl_Reader& reader, const TopoDS_Shape& shape) {
     ProductInfo info;
@@ -1122,19 +970,55 @@ ProductInfo StepEntityExtractor::GetProductInfo(STEPCAFControl_Reader& reader, c
     Handle(XSControl_TransferReader) TR = WS->TransferReader();
     if (TR.IsNull()) return info;
 
-    Handle(Standard_Transient) ent = TR->EntityFromShapeResult(shape, -1);
-    if (ent.IsNull()) return info;
+    Handle(Standard_Transient) ent;
+    for (Standard_Integer mode = 1; mode <= 4 && ent.IsNull(); ++mode) {
+        ent = TR->EntityFromShapeResult(shape, mode);
+    }
+    if (ent.IsNull()) {
+        Logger::Warning("EntityFromShapeResult found nothing for this shape (tried modes 1-4).");
+        return info;
+    }
 
-    // EntityFromShapeResult can return either a ProductDefinitionShape or, for
-    // some representation paths, a ProductDefinition directly — try both rather
-    // than assuming one.
-    Handle(StepBasic_ProductDefinition) prodDef;
+    auto& sdrMap = GetOrBuildSDRMap(WS);
+    Standard_Integer entNum = WS->Model()->Number(ent);
 
-    Handle(StepRepr_ProductDefinitionShape) pds = Handle(StepRepr_ProductDefinitionShape)::DownCast(ent);
-    if (!pds.IsNull()) {
-        prodDef = Handle(StepBasic_ProductDefinition)::DownCast(pds->Definition().ProductDefinition());
+    auto it = sdrMap.find(entNum);
+    Handle(StepShape_ShapeDefinitionRepresentation) sdr;
+    Handle(StepBasic_ProductDefinition) directProdDef;
+
+    if (it == sdrMap.end()) {
+        // Document-only / geometry-less entries (consumables, harness
+        // reference items) often resolve directly to a ProductDefinition
+        // rather than through the SDR map at all.
+        directProdDef = Handle(StepBasic_ProductDefinition)::DownCast(ent);
+        if (directProdDef.IsNull()) {
+            Logger::Warning("Entity type " + std::string(ent->DynamicType()->Name()) +
+                             " (#" + std::to_string(entNum) + ") not found in SDR map "
+                             "and is not directly a ProductDefinition either.");
+            return info;
+        }
+        Logger::Info("Entity #" + std::to_string(entNum) +
+                     " resolved directly as ProductDefinition (no SDR needed).");
     } else {
-        prodDef = Handle(StepBasic_ProductDefinition)::DownCast(ent);
+        sdr = it->second;
+    }
+
+    Handle(StepBasic_ProductDefinition) prodDef = directProdDef;
+
+    if (prodDef.IsNull() && !sdr.IsNull()) {
+        Handle(StepRepr_PropertyDefinition) propDef = sdr->Definition().PropertyDefinition();
+        if (!propDef.IsNull()) {
+            Handle(StepRepr_ProductDefinitionShape) pds =
+                Handle(StepRepr_ProductDefinitionShape)::DownCast(propDef);
+            if (!pds.IsNull()) {
+                prodDef = Handle(StepBasic_ProductDefinition)::DownCast(pds->Definition().ProductDefinition());
+            } else {
+                Logger::Warning("PropertyDefinition is not a ProductDefinitionShape — type is: " +
+                                 std::string(propDef->DynamicType()->Name()));
+            }
+        } else {
+            Logger::Warning("SDR.Definition() is not a PropertyDefinition.");
+        }
     }
     if (prodDef.IsNull()) return info;
 
@@ -1159,8 +1043,8 @@ FILE: core\step_entity_extractor.h
 #pragma once
 #include <string>
 #include <TopoDS_Shape.hxx>
+#include <TopoDS_Face.hxx>
 #include <STEPCAFControl_Reader.hxx>
-
 struct ProductInfo {
     bool found = false;
     std::string partNumber;   // STEP PRODUCT.Id() — the real human part number,
@@ -1172,7 +1056,6 @@ struct ProductInfo {
                                // (POUR SKYDROL)" on an O-ring with no structured
                                // material data)
 };
-
 // Reverse-maps a resulting TopoDS_Shape back to the STEP entity that produced it,
 // then walks the standard AP214/242 chain:
 //   ProductDefinitionShape -> ProductDefinition -> ProductDefinitionFormation -> Product
@@ -1186,6 +1069,7 @@ struct ProductInfo {
 class StepEntityExtractor {
 public:
     static ProductInfo GetProductInfo(STEPCAFControl_Reader& reader, const TopoDS_Shape& shape);
+    static std::string GetFaceBreadcrumb(STEPCAFControl_Reader& reader, const TopoDS_Face& face);
 };
 
 
@@ -1344,6 +1228,78 @@ static std::string LabelToString(const TDF_Label& label) {
     TDF_Tool::Entry(label, entry);
     return entry.ToCString();
 }
+
+AssemblyNode StepParser::SplitLeafByBreadcrumb(
+    STEPCAFControl_Reader& reader,
+    const TopoDS_Shape& shape,
+    const std::string& baseId,
+    const std::string& baseName,
+    ModelData& model)
+{
+    std::map<std::string, std::vector<TopoDS_Face>> groups;
+
+    TopExp_Explorer exp(shape, TopAbs_FACE);
+    for (; exp.More(); exp.Next()) {
+        TopoDS_Face face = TopoDS::Face(exp.Current());
+        std::string breadcrumb = StepEntityExtractor::GetFaceBreadcrumb(reader, face);
+        groups[breadcrumb].push_back(face);
+    }
+
+    // Only one bucket — no internal structure recovered, keep as a single
+    // leaf exactly like before. Signaled by returning isPart=false with no
+    // children set here; caller falls back to normal leaf handling.
+    if (groups.size() <= 1) {
+        AssemblyNode empty;
+        return empty; // caller checks children.empty() && !isPart as the "no split happened" signal
+    }
+
+    Logger::Info("Leaf \"" + baseName + "\" carries " + std::to_string(groups.size()) +
+                 " distinct embedded face-name paths — splitting into separate parts.");
+
+    AssemblyNode container;
+    container.id = baseId + "_split";
+    container.name = baseName + " (split by embedded structure)";
+
+    int idx = 0;
+    for (auto& kv : groups) {
+        const std::string& breadcrumb = kv.first;
+
+        TopoDS_Compound comp;
+        BRep_Builder builder;
+        builder.MakeCompound(comp);
+        for (auto& f : kv.second) builder.Add(comp, f);
+
+        std::string shortName = breadcrumb;
+        size_t lastSlash = breadcrumb.find_last_of('\\');
+        if (lastSlash != std::string::npos) shortName = breadcrumb.substr(lastSlash + 1);
+        if (shortName.empty()) shortName = "Ungrouped_" + std::to_string(idx);
+
+        AssemblyNode node;
+        node.id = baseId + "_seg" + std::to_string(idx);
+        node.isPart = true;
+        node.name = shortName;
+
+        std::string cacheKey = node.id;
+        size_t meshIdx = MeshConverter::ConvertAndCache(comp, cacheKey, model);
+
+        PartNode part;
+        part.id = node.id;
+        part.name = shortName;
+        part.sourcePath = breadcrumb;
+        part.meshIndex = meshIdx;
+        part.instanceCount = 1;
+        part.hasGeometry = true;
+
+        node.partIndex = model.parts.size();
+        model.parts.push_back(part);
+        model.partIndexCache[cacheKey] = node.partIndex;
+        container.children.push_back(node);
+        ++idx;
+    }
+
+    return container;
+}
+
 
 std::vector<StepParser::FaceGroup> StepParser::SplitByFaceStyling(
     const TopoDS_Shape& solid,
@@ -1856,6 +1812,39 @@ AssemblyNode StepParser::BuildAssemblyTree(
             model.parts.push_back(part);
             return node;
         }
+        
+        Standard_Integer faceCount = 0;
+        for (TopExp_Explorer fe(shape, TopAbs_FACE); fe.More(); fe.Next()) ++faceCount;
+
+        // Log anything unusually large regardless of threshold, so you can
+        // see the real face-count distribution across a file and tune
+        // breadcrumbSplitFaceThreshold with actual data instead of guessing.
+        if (faceCount > 50) {
+            Logger::Info("Leaf \"" + node.name + "\" has " + std::to_string(faceCount) +
+                         " faces (threshold=" + std::to_string(model.breadcrumbSplitFaceThreshold) +
+                         (faceCount > model.breadcrumbSplitFaceThreshold ? ", WILL attempt split)" : ", below threshold, skipping split)"));
+        }
+
+        AssemblyNode split;
+        if (faceCount > model.breadcrumbSplitFaceThreshold) {
+            split = SplitLeafByBreadcrumb(reader, shape, node.id, node.name, model);
+        }
+        if (!split.children.empty()) {
+            // Splitting succeeded — still attach the leaf's own product/color
+            // info to every resulting segment, since they all share the same
+            // top-level PRODUCT identity even though internally more granular.
+            ProductInfo prodInfo = StepEntityExtractor::GetProductInfo(reader, shape);
+            for (auto& seg : split.children) {
+                if (seg.partIndex < model.parts.size()) {
+                    ExtractColor(colorTool, label, model.parts[seg.partIndex].color);
+                    if (prodInfo.found) {
+                        model.parts[seg.partIndex].partNumber = prodInfo.partNumber;
+                        model.parts[seg.partIndex].descriptionText = prodInfo.description;
+                    }
+                }
+            }
+            return split;
+        }
 
         auto existing = model.partIndexCache.find(cacheKey);
         if (existing != model.partIndexCache.end()) {
@@ -1935,6 +1924,14 @@ private:
         const Handle(XCAFDoc_LayerTool)& layerTool,
         const TDF_Label& label,
         const gp_Trsf& parentTransform,
+        ModelData& model
+    );
+
+    AssemblyNode SplitLeafByBreadcrumb(
+        STEPCAFControl_Reader& reader,
+        const TopoDS_Shape& shape,
+        const std::string& baseId,
+        const std::string& baseName,
         ModelData& model
     );
 

@@ -11,19 +11,35 @@ static HierarchyMode ParseMode(const std::string& s) {
     return HierarchyMode::Auto;
 }
 
+static double ParseQuality(const std::string& s) {
+    if (s == "fast")    return 0.003;   // coarser mesh, faster
+    if (s == "precise") return 0.0003;  // finer mesh, slower
+    return 0.001; // "balanced" / default
+}
+
+static int ParseThreshold(const std::string& s) {
+    try { return std::stoi(s); } catch (...) { return 150; }
+}
+
 int main(int argc, char* argv[]) {
     std::string inputFile = (argc > 1) ? argv[1] : "assembly.stp";
     std::string glbOut    = (argc > 2) ? argv[2] : "output.glb";
     std::string jsonOut   = (argc > 3) ? argv[3] : "assembly.json";
     HierarchyMode mode = (argc > 4) ? ParseMode(argv[4]) : HierarchyMode::Auto;
+    double quality = (argc > 5) ? ParseQuality(argv[5]) : 0.001;
+    int breadcrumbThreshold = (argc > 6) ? ParseThreshold(argv[6]) : 150;
 
     std::cout << "=== STEP to GLB Converter ===" << std::endl;
     std::cout << "Input:  " << inputFile << std::endl;
     std::cout << "GLB:    " << glbOut << std::endl;
     std::cout << "JSON:   " << jsonOut << std::endl;
     std::cout << "Mode:   " << (argc > 4 ? argv[4] : "auto") << std::endl;
+    std::cout << "Quality: " << (argc > 5 ? argv[5] : "balanced") << std::endl;
+    std::cout << "Breadcrumb face threshold: " << breadcrumbThreshold << std::endl;
 
     ModelData model;
+    model.meshQualityMultiplier = quality;
+    model.breadcrumbSplitFaceThreshold = breadcrumbThreshold;
     StepParser parser;
 
     std::cout << "\n[1/3] Parsing STEP file..." << std::endl;

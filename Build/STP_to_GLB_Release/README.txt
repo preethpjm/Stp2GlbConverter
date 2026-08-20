@@ -21,6 +21,18 @@ MODE (optional 4th argument)
   hierarchy - force the hierarchy path even if detection says otherwise.
   flat      - force the geometry-split path even if a real hierarchy exists.
 
+QUALITY (optional 5th argument)
+--------------------------------
+  fast      - coarser mesh, faster conversion. Use for large/complex assemblies.
+  balanced  - (default) unchanged from original quality.
+  precise   - finer mesh, slower. Use when visual fidelity matters more than speed.
+
+THRESHOLD (optional 6th argument, default 150)
+------------------------------------------------
+  Face-count above which a leaf part is checked for internal CATIA
+  breadcrumb structure and split into sub-parts if found. Leave at default
+  unless a specific file's face-count logs suggest otherwise.
+
 OUTPUT FILES
 ------------
   .glb   - 3D mesh, open in Windows 3D Viewer, Blender, online at gltf-viewer.donmccurdy.com

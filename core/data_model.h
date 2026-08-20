@@ -60,6 +60,7 @@ struct PartNode {
     ColorInfo color;
     MaterialInfo material;
     ValidationProps validation;
+    std::string sourcePath; 
     std::string partNumber;             // NEW — real STEP PRODUCT.Id()
     std::string descriptionText;        // NEW — STEP PRODUCT.Description(), free-text hints
     std::vector<std::string> layers;    // NEW — CAD layer/group assignments, if any
@@ -103,4 +104,5 @@ struct ModelData {
     std::vector<RootShapeInfo> rootReports;
     double meshQualityMultiplier = 0.001;
     DocumentMetadata documentMetadata;  // NEW
+    int breadcrumbSplitFaceThreshold = 150;
 };

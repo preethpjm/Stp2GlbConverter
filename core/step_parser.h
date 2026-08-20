@@ -29,6 +29,14 @@ private:
         ModelData& model
     );
 
+    AssemblyNode SplitLeafByBreadcrumb(
+        STEPCAFControl_Reader& reader,
+        const TopoDS_Shape& shape,
+        const std::string& baseId,
+        const std::string& baseName,
+        ModelData& model
+    );
+
     AssemblyNode BuildFromGeometrySplit(
         const TopoDS_Shape& shape,
         const Handle(XCAFDoc_ColorTool)& colorTool,

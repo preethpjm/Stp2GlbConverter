@@ -26,7 +26,7 @@ if "%~1"=="" (
     echo.
     echo  STP to GLB Converter
     echo  --------------------
-    echo  Usage:        convert.bat input.stp [output.glb] [assembly.json] [auto^|hierarchy^|flat]
+        echo  Usage:        convert.bat input.stp [output.glb] [assembly.json] [auto^|hierarchy^|flat] [fast^|balanced^|precise] [threshold]
     echo  Drag and drop: drag your .stp file onto convert.bat
     echo.
     pause
@@ -37,19 +37,25 @@ set INPUT=%~1
 set GLB=%~2
 set JSON=%~3
 set MODE=%~4
+set QUALITY=%~5
+set THRESHOLD=%~6
 
-if "%GLB%"==""  set GLB=%~dpn1.glb
-if "%JSON%"=="" set JSON=%~dpn1_assembly.json
-if "%MODE%"=="" set MODE=auto
+if "%GLB%"==""       set GLB=%~dpn1.glb
+if "%JSON%"==""      set JSON=%~dpn1_assembly.json
+if "%MODE%"==""      set MODE=auto
+if "%QUALITY%"==""   set QUALITY=balanced
+if "%THRESHOLD%"=="" set THRESHOLD=150
 
 echo.
-echo  Input  : %INPUT%
-echo  GLB    : %GLB%
-echo  JSON   : %JSON%
-echo  Mode   : %MODE%   (auto / hierarchy / flat)
+echo  Input     : %INPUT%
+echo  GLB       : %GLB%
+echo  JSON      : %JSON%
+echo  Mode      : %MODE%       (auto / hierarchy / flat)
+echo  Quality   : %QUALITY%    (fast / balanced / precise)
+echo  Threshold : %THRESHOLD%  (breadcrumb-split face count)
 echo.
 
-"%~dp0cad-step-to-glb.exe" "%INPUT%" "%GLB%" "%JSON%" "%MODE%"
+"%~dp0cad-step-to-glb.exe" "%INPUT%" "%GLB%" "%JSON%" "%MODE%" "%QUALITY%" "%THRESHOLD%"
 
 if %ERRORLEVEL% NEQ 0 (
     echo.
@@ -90,6 +96,18 @@ MODE (optional 4th argument)
               by geometry/color.
   hierarchy - force the hierarchy path even if detection says otherwise.
   flat      - force the geometry-split path even if a real hierarchy exists.
+
+QUALITY (optional 5th argument)
+--------------------------------
+  fast      - coarser mesh, faster conversion. Use for large/complex assemblies.
+  balanced  - (default) unchanged from original quality.
+  precise   - finer mesh, slower. Use when visual fidelity matters more than speed.
+
+THRESHOLD (optional 6th argument, default 150)
+------------------------------------------------
+  Face-count above which a leaf part is checked for internal CATIA
+  breadcrumb structure and split into sub-parts if found. Leave at default
+  unless a specific file's face-count logs suggest otherwise.
 
 OUTPUT FILES
 ------------

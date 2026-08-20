@@ -8,21 +8,41 @@
 #include <StepRepr_HArray1OfRepresentationItem.hxx>
 #include <StepRepr_ProductDefinitionShape.hxx>
 #include <StepRepr_PropertyDefinition.hxx>
+#include <StepRepr_ShapeRepresentationRelationship.hxx>
+#include <StepShape_AdvancedFace.hxx>
 #include <StepBasic_ProductDefinition.hxx>
 #include <StepBasic_ProductDefinitionFormation.hxx>
 #include <StepBasic_Product.hxx>
 #include <TCollection_HAsciiString.hxx>
+#include <TopoDS_Face.hxx>
 #include <Utils/logger.h>
 #include <map>
 #include <memory>
-#include <StepRepr_ShapeRepresentationRelationship.hxx>
 
-// Maps: geometry/representation entity number -> the SDR that owns it,
-// built once per file by scanning every SHAPE_DEFINITION_REPRESENTATION and
-// walking its OWN .used_representation field forward into whatever it
-// references (recursing into nested representations). This reads each
-// entity's own declared fields directly — the most stable part of OCCT's
-// STEP API — instead of relying on graph reverse-reference computation.
+// --- Face breadcrumb lookup (used by SplitLeafByBreadcrumb) --------------
+
+std::string StepEntityExtractor::GetFaceBreadcrumb(STEPCAFControl_Reader& reader, const TopoDS_Face& face) {
+    Handle(XSControl_WorkSession) WS = reader.Reader().WS();
+    if (WS.IsNull()) return "";
+    Handle(XSControl_TransferReader) TR = WS->TransferReader();
+    if (TR.IsNull()) return "";
+
+    Handle(Standard_Transient) ent;
+    for (Standard_Integer mode = 1; mode <= 4 && ent.IsNull(); ++mode) {
+        ent = TR->EntityFromShapeResult(face, mode);
+    }
+    if (ent.IsNull()) return "";
+
+    Handle(StepShape_AdvancedFace) af = Handle(StepShape_AdvancedFace)::DownCast(ent);
+    if (af.IsNull() || af->Name().IsNull()) return "";
+
+    std::string name = af->Name()->ToCString();
+    if (name.empty() || name == " ") return "";
+    return name;
+}
+
+// --- SDR lookup map (used by GetProductInfo) ------------------------------
+
 static Handle(XSControl_WorkSession) s_cachedWS;
 static std::shared_ptr<std::map<Standard_Integer, Handle(StepShape_ShapeDefinitionRepresentation)>> s_cachedMap;
 
@@ -48,8 +68,6 @@ static void CollectItemsRecursive(
         Standard_Integer itemNum = model->Number(item);
         if (itemNum != 0) outMap[itemNum] = owningSDR;
 
-        // Some items are themselves nested Representations (common in AP242
-        // multi-level shape structures) — recurse into those too.
         Handle(StepRepr_Representation) nestedRep = Handle(StepRepr_Representation)::DownCast(item);
         if (!nestedRep.IsNull()) {
             CollectItemsRecursive(model, nestedRep, owningSDR, outMap, depth + 1);
@@ -57,12 +75,6 @@ static void CollectItemsRecursive(
     }
 }
 
-// CATIA's AP242 export pattern: an SDR's own representation is often just a
-// placement/context wrapper, with the actual geometry-bearing representation
-// linked separately via SHAPE_REPRESENTATION_RELATIONSHIP rather than held
-// directly as an Item(). Confirmed present in this file (112 instances) —
-// propagate the SDR ownership across these links, both directions, and
-// repeat a few passes to catch chained relationships.
 static void PropagateAcrossRelationships(
     const Handle(Interface_InterfaceModel)& model,
     std::map<Standard_Integer, Handle(StepShape_ShapeDefinitionRepresentation)>& outMap)
@@ -96,7 +108,6 @@ static void PropagateAcrossRelationships(
                 changed = true;
             }
         }
-
         if (!changed) break;
     }
 }
@@ -130,6 +141,8 @@ GetOrBuildSDRMap(const Handle(XSControl_WorkSession)& WS) {
     return *s_cachedMap;
 }
 
+// --- GetProductInfo --------------------------------------------------------
+
 ProductInfo StepEntityExtractor::GetProductInfo(STEPCAFControl_Reader& reader, const TopoDS_Shape& shape) {
     ProductInfo info;
 
@@ -152,30 +165,43 @@ ProductInfo StepEntityExtractor::GetProductInfo(STEPCAFControl_Reader& reader, c
     Standard_Integer entNum = WS->Model()->Number(ent);
 
     auto it = sdrMap.find(entNum);
+    Handle(StepShape_ShapeDefinitionRepresentation) sdr;
+    Handle(StepBasic_ProductDefinition) directProdDef;
+
     if (it == sdrMap.end()) {
-        Logger::Warning("Entity type " + std::string(ent->DynamicType()->Name()) +
-                         " (#" + std::to_string(entNum) + ") not found in SDR map.");
-        return info;
+        // Document-only / geometry-less entries (consumables, harness
+        // reference items) often resolve directly to a ProductDefinition
+        // rather than through the SDR map at all.
+        directProdDef = Handle(StepBasic_ProductDefinition)::DownCast(ent);
+        if (directProdDef.IsNull()) {
+            Logger::Warning("Entity type " + std::string(ent->DynamicType()->Name()) +
+                             " (#" + std::to_string(entNum) + ") not found in SDR map "
+                             "and is not directly a ProductDefinition either.");
+            return info;
+        }
+        Logger::Info("Entity #" + std::to_string(entNum) +
+                     " resolved directly as ProductDefinition (no SDR needed).");
+    } else {
+        sdr = it->second;
     }
 
-    Handle(StepShape_ShapeDefinitionRepresentation) sdr = it->second;
+    Handle(StepBasic_ProductDefinition) prodDef = directProdDef;
 
-    Handle(StepRepr_PropertyDefinition) propDef = sdr->Definition().PropertyDefinition();
-    if (propDef.IsNull()) {
-        Logger::Warning("SDR.Definition() is not a PropertyDefinition.");
-        return info;
+    if (prodDef.IsNull() && !sdr.IsNull()) {
+        Handle(StepRepr_PropertyDefinition) propDef = sdr->Definition().PropertyDefinition();
+        if (!propDef.IsNull()) {
+            Handle(StepRepr_ProductDefinitionShape) pds =
+                Handle(StepRepr_ProductDefinitionShape)::DownCast(propDef);
+            if (!pds.IsNull()) {
+                prodDef = Handle(StepBasic_ProductDefinition)::DownCast(pds->Definition().ProductDefinition());
+            } else {
+                Logger::Warning("PropertyDefinition is not a ProductDefinitionShape — type is: " +
+                                 std::string(propDef->DynamicType()->Name()));
+            }
+        } else {
+            Logger::Warning("SDR.Definition() is not a PropertyDefinition.");
+        }
     }
-
-    Handle(StepRepr_ProductDefinitionShape) pds =
-        Handle(StepRepr_ProductDefinitionShape)::DownCast(propDef);
-    if (pds.IsNull()) {
-        Logger::Warning("PropertyDefinition is not a ProductDefinitionShape — type is: " +
-                         std::string(propDef->DynamicType()->Name()));
-        return info;
-    }
-
-    Handle(StepBasic_ProductDefinition) prodDef =
-        Handle(StepBasic_ProductDefinition)::DownCast(pds->Definition().ProductDefinition());
     if (prodDef.IsNull()) return info;
 
     Handle(StepBasic_ProductDefinitionFormation) formation = prodDef->Formation();

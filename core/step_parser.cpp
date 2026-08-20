@@ -34,6 +34,78 @@ static std::string LabelToString(const TDF_Label& label) {
     return entry.ToCString();
 }
 
+AssemblyNode StepParser::SplitLeafByBreadcrumb(
+    STEPCAFControl_Reader& reader,
+    const TopoDS_Shape& shape,
+    const std::string& baseId,
+    const std::string& baseName,
+    ModelData& model)
+{
+    std::map<std::string, std::vector<TopoDS_Face>> groups;
+
+    TopExp_Explorer exp(shape, TopAbs_FACE);
+    for (; exp.More(); exp.Next()) {
+        TopoDS_Face face = TopoDS::Face(exp.Current());
+        std::string breadcrumb = StepEntityExtractor::GetFaceBreadcrumb(reader, face);
+        groups[breadcrumb].push_back(face);
+    }
+
+    // Only one bucket — no internal structure recovered, keep as a single
+    // leaf exactly like before. Signaled by returning isPart=false with no
+    // children set here; caller falls back to normal leaf handling.
+    if (groups.size() <= 1) {
+        AssemblyNode empty;
+        return empty; // caller checks children.empty() && !isPart as the "no split happened" signal
+    }
+
+    Logger::Info("Leaf \"" + baseName + "\" carries " + std::to_string(groups.size()) +
+                 " distinct embedded face-name paths — splitting into separate parts.");
+
+    AssemblyNode container;
+    container.id = baseId + "_split";
+    container.name = baseName + " (split by embedded structure)";
+
+    int idx = 0;
+    for (auto& kv : groups) {
+        const std::string& breadcrumb = kv.first;
+
+        TopoDS_Compound comp;
+        BRep_Builder builder;
+        builder.MakeCompound(comp);
+        for (auto& f : kv.second) builder.Add(comp, f);
+
+        std::string shortName = breadcrumb;
+        size_t lastSlash = breadcrumb.find_last_of('\\');
+        if (lastSlash != std::string::npos) shortName = breadcrumb.substr(lastSlash + 1);
+        if (shortName.empty()) shortName = "Ungrouped_" + std::to_string(idx);
+
+        AssemblyNode node;
+        node.id = baseId + "_seg" + std::to_string(idx);
+        node.isPart = true;
+        node.name = shortName;
+
+        std::string cacheKey = node.id;
+        size_t meshIdx = MeshConverter::ConvertAndCache(comp, cacheKey, model);
+
+        PartNode part;
+        part.id = node.id;
+        part.name = shortName;
+        part.sourcePath = breadcrumb;
+        part.meshIndex = meshIdx;
+        part.instanceCount = 1;
+        part.hasGeometry = true;
+
+        node.partIndex = model.parts.size();
+        model.parts.push_back(part);
+        model.partIndexCache[cacheKey] = node.partIndex;
+        container.children.push_back(node);
+        ++idx;
+    }
+
+    return container;
+}
+
+
 std::vector<StepParser::FaceGroup> StepParser::SplitByFaceStyling(
     const TopoDS_Shape& solid,
     const Handle(XCAFDoc_ColorTool)& colorTool,
@@ -544,6 +616,39 @@ AssemblyNode StepParser::BuildAssemblyTree(
             node.partIndex = model.parts.size();
             model.parts.push_back(part);
             return node;
+        }
+        
+        Standard_Integer faceCount = 0;
+        for (TopExp_Explorer fe(shape, TopAbs_FACE); fe.More(); fe.Next()) ++faceCount;
+
+        // Log anything unusually large regardless of threshold, so you can
+        // see the real face-count distribution across a file and tune
+        // breadcrumbSplitFaceThreshold with actual data instead of guessing.
+        if (faceCount > 50) {
+            Logger::Info("Leaf \"" + node.name + "\" has " + std::to_string(faceCount) +
+                         " faces (threshold=" + std::to_string(model.breadcrumbSplitFaceThreshold) +
+                         (faceCount > model.breadcrumbSplitFaceThreshold ? ", WILL attempt split)" : ", below threshold, skipping split)"));
+        }
+
+        AssemblyNode split;
+        if (faceCount > model.breadcrumbSplitFaceThreshold) {
+            split = SplitLeafByBreadcrumb(reader, shape, node.id, node.name, model);
+        }
+        if (!split.children.empty()) {
+            // Splitting succeeded — still attach the leaf's own product/color
+            // info to every resulting segment, since they all share the same
+            // top-level PRODUCT identity even though internally more granular.
+            ProductInfo prodInfo = StepEntityExtractor::GetProductInfo(reader, shape);
+            for (auto& seg : split.children) {
+                if (seg.partIndex < model.parts.size()) {
+                    ExtractColor(colorTool, label, model.parts[seg.partIndex].color);
+                    if (prodInfo.found) {
+                        model.parts[seg.partIndex].partNumber = prodInfo.partNumber;
+                        model.parts[seg.partIndex].descriptionText = prodInfo.description;
+                    }
+                }
+            }
+            return split;
         }
 
         auto existing = model.partIndexCache.find(cacheKey);
