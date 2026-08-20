@@ -3,6 +3,7 @@
 #include <vector>
 #include <unordered_map>
 #include <gp_Trsf.hxx>
+#include "step_header_parser.h"
 
 struct Mesh {
     std::vector<float> vertices;
@@ -55,11 +56,13 @@ struct PartNode {
     std::string name;
     size_t meshIndex = 0;
     size_t instanceCount = 1;
-    bool hasGeometry = true;   // false for BOM-only items (consumables,
-                                // reference placeholders) with no 3D shape
+    bool hasGeometry = true;
     ColorInfo color;
     MaterialInfo material;
     ValidationProps validation;
+    std::string partNumber;             // NEW — real STEP PRODUCT.Id()
+    std::string descriptionText;        // NEW — STEP PRODUCT.Description(), free-text hints
+    std::vector<std::string> layers;    // NEW — CAD layer/group assignments, if any
 };
 
 struct AssemblyNode {
@@ -93,9 +96,11 @@ struct ModelData {
     std::vector<Mesh> uniqueMeshes;
     std::vector<PartNode> parts;
     AssemblyNode root;
-    std::unordered_map<std::string, size_t> meshCache;       // cacheKey -> mesh index
-    std::unordered_map<std::string, size_t> partIndexCache;  // cacheKey -> PartNode index
-    std::vector<PmiEntry> pmi;        // file-scoped, not tree-scoped
-    bool hierarchyAvailable = true;   // true only if ALL roots had real structure
+    std::unordered_map<std::string, size_t> meshCache;
+    std::unordered_map<std::string, size_t> partIndexCache;
+    std::vector<PmiEntry> pmi;
+    bool hierarchyAvailable = true;
     std::vector<RootShapeInfo> rootReports;
+    double meshQualityMultiplier = 0.001;
+    DocumentMetadata documentMetadata;  // NEW
 };

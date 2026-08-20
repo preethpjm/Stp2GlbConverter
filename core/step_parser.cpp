@@ -1,5 +1,7 @@
 #include "step_parser.h"
 #include "mesh_converter.h"
+#include "step_header_parser.h"
+#include "step_entity_extractor.h"
 #include <STEPCAFControl_Reader.hxx>
 #include <XCAFApp_Application.hxx>
 #include <XCAFDoc_DocumentTool.hxx>
@@ -20,6 +22,11 @@
 #include <Quantity_Color.hxx>
 #include <Utils/logger.h>
 #include <sstream>
+#include <TopoDS.hxx>
+#include <TopoDS_Compound.hxx>
+#include <TopoDS_Face.hxx>
+#include <BRep_Builder.hxx>
+#include <map>
 
 static std::string LabelToString(const TDF_Label& label) {
     TCollection_AsciiString entry;
@@ -27,8 +34,86 @@ static std::string LabelToString(const TDF_Label& label) {
     return entry.ToCString();
 }
 
+std::vector<StepParser::FaceGroup> StepParser::SplitByFaceStyling(
+    const TopoDS_Shape& solid,
+    const Handle(XCAFDoc_ColorTool)& colorTool,
+    const Handle(XCAFDoc_LayerTool)& layerTool) const
+{
+    std::map<std::string, std::vector<TopoDS_Face>> groups;
+    std::map<std::string, ColorInfo> groupColor;
+    std::map<std::string, std::string> groupLayer;
+
+    TopExp_Explorer exp(solid, TopAbs_FACE);
+    for (; exp.More(); exp.Next()) {
+        TopoDS_Face face = TopoDS::Face(exp.Current());
+
+        ColorInfo color;
+        if (!colorTool.IsNull()) {
+            Quantity_Color col;
+            // Color lookup is shape-based in OCCT, not label-based, so this
+            // works at face granularity exactly like it does at solid
+            // granularity elsewhere in this file.
+            if (colorTool->GetColor(face, XCAFDoc_ColorSurf, col) ||
+                colorTool->GetColor(face, XCAFDoc_ColorGen, col)) {
+                color.hasColor = true;
+                color.r = (float)col.Red();
+                color.g = (float)col.Green();
+                color.b = (float)col.Blue();
+            }
+        }
+
+        std::string layerName;
+        if (!layerTool.IsNull()) {
+            TDF_LabelSequence layerLabels;
+            layerTool->GetLayers(face, layerLabels);
+            if (layerLabels.Length() > 0) {
+                Handle(TDataStd_Name) nameAttr;
+                if (layerLabels.Value(1).FindAttribute(TDataStd_Name::GetID(), nameAttr)) {
+                    layerName = TCollection_AsciiString(nameAttr->Get()).ToCString();
+                }
+            }
+        }
+
+        // Prefer color as the grouping signal (finer-grained, more commonly
+        // populated); fall back to layer; if neither exists, everything
+        // lands in one bucket — same as the old whole-solid behavior.
+        std::string sig;
+        if (color.hasColor) {
+            sig = "c:" + std::to_string((int)(color.r * 255)) + "-" +
+                          std::to_string((int)(color.g * 255)) + "-" +
+                          std::to_string((int)(color.b * 255));
+        } else if (!layerName.empty()) {
+            sig = "l:" + layerName;
+        } else {
+            sig = "ungrouped";
+        }
+
+        groups[sig].push_back(face);
+        groupColor[sig] = color;
+        groupLayer[sig] = layerName;
+    }
+
+    std::vector<FaceGroup> result;
+    for (auto& kv : groups) {
+        TopoDS_Compound comp;
+        BRep_Builder builder;
+        builder.MakeCompound(comp);
+        for (auto& f : kv.second) builder.Add(comp, f);
+
+        FaceGroup fg;
+        fg.shape = comp;
+        fg.color = groupColor[kv.first];
+        fg.layerTag = groupLayer[kv.first];
+        result.push_back(fg);
+    }
+    return result;
+}
+
+
 bool StepParser::Load(const std::string& stepFile, ModelData& outModel, HierarchyMode mode) {
     Logger::Info("Parsing STEP file: " + stepFile);
+
+    outModel.documentMetadata = StepHeaderParser::Parse(stepFile);
 
     Handle(XCAFApp_Application) app = XCAFApp_Application::GetApplication();
     Handle(TDocStd_Document) doc;
@@ -38,9 +123,9 @@ bool StepParser::Load(const std::string& stepFile, ModelData& outModel, Hierarch
     reader.SetNameMode(Standard_True);
     reader.SetColorMode(Standard_True);
     reader.SetLayerMode(Standard_True);
-    reader.SetMatMode(Standard_True);    // materials (MATERIAL_DESIGNATION)
-    reader.SetGDTMode(Standard_True);    // PMI / GD&T (semantic)
-    reader.SetPropsMode(Standard_True);  // validation properties (area/volume/centroid)
+    reader.SetMatMode(Standard_True);
+    reader.SetGDTMode(Standard_True);
+    reader.SetPropsMode(Standard_True);
 
     IFSelect_ReturnStatus stat = reader.ReadFile(stepFile.c_str());
     if (stat != IFSelect_RetDone) {
@@ -61,6 +146,8 @@ bool StepParser::Load(const std::string& stepFile, ModelData& outModel, Hierarch
         XCAFDoc_DocumentTool::MaterialTool(doc->Main());
     Handle(XCAFDoc_DimTolTool) dimTolTool =
         XCAFDoc_DocumentTool::DimTolTool(doc->Main());
+    Handle(XCAFDoc_LayerTool) layerTool =
+        XCAFDoc_DocumentTool::LayerTool(doc->Main());
 
     TDF_LabelSequence freeShapes;
     shapeTool->GetFreeShapes(freeShapes);
@@ -84,14 +171,9 @@ bool StepParser::Load(const std::string& stepFile, ModelData& outModel, Hierarch
         bool wasForced = false;
 
         if (mode == HierarchyMode::ForceHierarchy && !detectedHierarchy) {
-            Logger::Warning("ForceHierarchy set, but this root has no real "
-                             "structure. Forcing anyway — expect a near-empty "
-                             "or single-node tree for this root.");
             useHierarchyPath = true;
             wasForced = true;
         } else if (mode == HierarchyMode::ForceFlat && detectedHierarchy) {
-            Logger::Info("ForceFlat set: ignoring real structure found in "
-                         "this root, using geometry-split path instead.");
             useHierarchyPath = false;
             wasForced = true;
         }
@@ -111,11 +193,11 @@ bool StepParser::Load(const std::string& stepFile, ModelData& outModel, Hierarch
 
         AssemblyNode child;
         if (useHierarchyPath) {
-            child = BuildAssemblyTree(shapeTool, colorTool, materialTool,
+            child = BuildAssemblyTree(reader, shapeTool, colorTool, materialTool, layerTool,
                                        rootLabel, gp_Trsf(), outModel);
         } else {
             TopoDS_Shape shape = shapeTool->GetShape(rootLabel);
-            child = BuildFromGeometrySplit(shape, colorTool, outModel);
+            child = BuildFromGeometrySplit(shape, colorTool, layerTool, outModel);
         }
         outModel.root.children.push_back(child);
 
@@ -151,19 +233,15 @@ bool StepParser::TreeHasRealStructure(const Handle(XCAFDoc_ShapeTool)& shapeTool
         TDF_LabelSequence components;
         shapeTool->GetComponents(label, components, Standard_False);
         if (components.Length() > 0) return true;
-
-        Logger::Warning("Label flagged as assembly but has 0 components — "
-                         "treating as flat for routing purposes.");
+        Logger::Warning("Label flagged as assembly but has 0 components — treating as flat.");
         return false;
     }
-
     if (shapeTool->IsComponent(label)) return true;
 
     TDF_Label referred;
     if (XCAFDoc_ShapeTool::GetReferredShape(label, referred)) {
         return TreeHasRealStructure(shapeTool, referred);
     }
-
     return false;
 }
 
@@ -184,12 +262,8 @@ void StepParser::ExtractColor(const Handle(XCAFDoc_ColorTool)& colorTool,
 void StepParser::ExtractMaterial(const Handle(XCAFDoc_MaterialTool)& materialTool,
                                   const TDF_Label& label, MaterialInfo& outMaterial) const {
     if (materialTool.IsNull()) return;
-
     Handle(TCollection_HAsciiString) name, desc, densName, densValType;
     Standard_Real density = 0.0;
-
-    // Verify this overload against your OCCT version if it doesn't compile —
-    // XCAFDoc_MaterialTool::GetMaterial has shifted slightly across releases.
     if (materialTool->GetMaterial(label, name, desc, density, densName, densValType)) {
         if (!name.IsNull() && name->Length() > 0) {
             outMaterial.hasMaterial = true;
@@ -222,12 +296,23 @@ void StepParser::ExtractValidationProps(const TDF_Label& label, ValidationProps&
     }
 }
 
+void StepParser::ExtractLayers(const Handle(XCAFDoc_LayerTool)& layerTool,
+                                const TDF_Label& label, std::vector<std::string>& outLayers) const {
+    if (layerTool.IsNull()) return;
+    TDF_LabelSequence layerLabels;
+    layerTool->GetLayers(label, layerLabels);
+    for (Standard_Integer i = 1; i <= layerLabels.Length(); ++i) {
+        Handle(TDataStd_Name) nameAttr;
+        if (layerLabels.Value(i).FindAttribute(TDataStd_Name::GetID(), nameAttr)) {
+            outLayers.push_back(TCollection_AsciiString(nameAttr->Get()).ToCString());
+        }
+    }
+}
+
 void StepParser::ExtractPmi(const Handle(XCAFDoc_DimTolTool)& dimTolTool, ModelData& model) const {
     if (dimTolTool.IsNull()) return;
-
     TDF_LabelSequence dimTolLabels;
     dimTolTool->GetDimTolLabels(dimTolLabels);
-
     if (dimTolLabels.Length() == 0) return;
 
     Logger::Info("PMI/GD&T entities found: " + std::to_string(dimTolLabels.Length()));
@@ -243,7 +328,6 @@ void StepParser::ExtractPmi(const Handle(XCAFDoc_DimTolTool)& dimTolTool, ModelD
 
         Handle(XCAFDoc_Dimension) dimAttr;
         Handle(XCAFDoc_GeomTolerance) tolAttr;
-
         if (dtLabel.FindAttribute(XCAFDoc_Dimension::GetID(), dimAttr)) {
             entry.kind = "Dimension";
         } else if (dtLabel.FindAttribute(XCAFDoc_GeomTolerance::GetID(), tolAttr)) {
@@ -251,7 +335,6 @@ void StepParser::ExtractPmi(const Handle(XCAFDoc_DimTolTool)& dimTolTool, ModelD
         } else {
             entry.kind = "Datum";
         }
-
         model.pmi.push_back(entry);
     }
 }
@@ -259,63 +342,112 @@ void StepParser::ExtractPmi(const Handle(XCAFDoc_DimTolTool)& dimTolTool, ModelD
 AssemblyNode StepParser::BuildFromGeometrySplit(
     const TopoDS_Shape& shape,
     const Handle(XCAFDoc_ColorTool)& colorTool,
+    const Handle(XCAFDoc_LayerTool)& layerTool,
     ModelData& model)
 {
-    Logger::Warning("No assembly structure found in source STEP file — "
-                     "falling back to geometry split by disjoint solids "
-                     "+ outer-surface color grouping.");
+    Logger::Warning("No assembly structure found — falling back to geometry split "
+                     "by disjoint solids, with face-level color/layer splitting "
+                     "for any solid that turns out to be internally fused.");
 
     AssemblyNode container;
     container.id = "geomsplit_root";
     container.name = "Ungrouped Solids (no source hierarchy)";
 
     int solidIndex = 0;
-    TopExp_Explorer exp(shape, TopAbs_SOLID);
-    for (; exp.More(); exp.Next(), ++solidIndex) {
-        const TopoDS_Shape& solid = exp.Current();
+    TopExp_Explorer solidExp(shape, TopAbs_SOLID);
+    for (; solidExp.More(); solidExp.Next(), ++solidIndex) {
+        const TopoDS_Shape& solid = solidExp.Current();
 
-        ColorInfo color;
-        if (!colorTool.IsNull()) {
-            Quantity_Color col;
-            if (colorTool->GetColor(solid, XCAFDoc_ColorSurf, col) ||
-                colorTool->GetColor(solid, XCAFDoc_ColorGen, col)) {
-                color.hasColor = true;
-                color.r = (float)col.Red();
-                color.g = (float)col.Green();
-                color.b = (float)col.Blue();
+        auto faceGroups = SplitByFaceStyling(solid, colorTool, layerTool);
+
+        if (faceGroups.size() <= 1) {
+            // No internal styling distinction found — same as the original
+            // behavior: treat the whole solid as one part.
+            ColorInfo color;
+            if (!faceGroups.empty()) {
+                color = faceGroups[0].color;
+            } else if (!colorTool.IsNull()) {
+                Quantity_Color col;
+                if (colorTool->GetColor(solid, XCAFDoc_ColorSurf, col)) {
+                    color.hasColor = true;
+                    color.r = (float)col.Red();
+                    color.g = (float)col.Green();
+                    color.b = (float)col.Blue();
+                }
+            }
+
+            std::string colorTag = color.hasColor
+                ? ("_c" + std::to_string((int)(color.r * 255)) + "-" +
+                          std::to_string((int)(color.g * 255)) + "-" +
+                          std::to_string((int)(color.b * 255)))
+                : "";
+
+            AssemblyNode node;
+            node.id = "solid_" + std::to_string(solidIndex);
+            node.isPart = true;
+            node.name = "Part_" + std::to_string(solidIndex) + colorTag;
+
+            std::string cacheKey = "geomsplit_" + std::to_string(solidIndex);
+            size_t meshIdx = MeshConverter::ConvertAndCache(solid, cacheKey, model);
+
+            PartNode part;
+            part.id = node.id;
+            part.name = node.name;
+            part.meshIndex = meshIdx;
+            part.instanceCount = 1;
+            part.color = color;
+            part.hasGeometry = true;
+
+            node.partIndex = model.parts.size();
+            model.parts.push_back(part);
+            model.partIndexCache[cacheKey] = node.partIndex;
+            container.children.push_back(node);
+
+        } else {
+            // Internal color/layer boundaries found within a fused solid —
+            // split into separately selectable regions. NOTE: these sub-parts
+            // are open face shells, not closed solids — fine for mesh/GLB
+            // selection purposes, but don't expect meaningful volume/mass if
+            // you ever compute validation properties on them.
+            Logger::Info("Solid " + std::to_string(solidIndex) + " has " +
+                         std::to_string(faceGroups.size()) +
+                         " internally distinct styled regions — splitting.");
+
+            for (size_t g = 0; g < faceGroups.size(); ++g) {
+                const auto& fg = faceGroups[g];
+
+                std::string colorTag = fg.color.hasColor
+                    ? ("_c" + std::to_string((int)(fg.color.r * 255)) + "-" +
+                              std::to_string((int)(fg.color.g * 255)) + "-" +
+                              std::to_string((int)(fg.color.b * 255)))
+                    : "";
+                std::string layerTag = !fg.layerTag.empty() ? ("_L-" + fg.layerTag) : "";
+
+                AssemblyNode node;
+                node.id = "solid_" + std::to_string(solidIndex) + "_region_" + std::to_string(g);
+                node.isPart = true;
+                node.name = "Part_" + std::to_string(solidIndex) + "_" +
+                            std::to_string(g) + colorTag + layerTag;
+
+                std::string cacheKey = "geomsplit_" + std::to_string(solidIndex) +
+                                        "_" + std::to_string(g);
+                size_t meshIdx = MeshConverter::ConvertAndCache(fg.shape, cacheKey, model);
+
+                PartNode part;
+                part.id = node.id;
+                part.name = node.name;
+                part.meshIndex = meshIdx;
+                part.instanceCount = 1;
+                part.color = fg.color;
+                part.hasGeometry = true;
+                if (!fg.layerTag.empty()) part.layers.push_back(fg.layerTag);
+
+                node.partIndex = model.parts.size();
+                model.parts.push_back(part);
+                model.partIndexCache[cacheKey] = node.partIndex;
+                container.children.push_back(node);
             }
         }
-
-        std::string colorTag;
-        if (color.hasColor) {
-            colorTag = "_c" + std::to_string((int)(color.r * 255)) + "-" +
-                              std::to_string((int)(color.g * 255)) + "-" +
-                              std::to_string((int)(color.b * 255));
-        }
-
-        AssemblyNode node;
-        node.id = "solid_" + std::to_string(solidIndex);
-        node.isPart = true;
-        node.name = "Part_" + std::to_string(solidIndex) + colorTag;
-
-        std::string cacheKey = "geomsplit_" + std::to_string(solidIndex);
-        size_t meshIdx = MeshConverter::ConvertAndCache(solid, cacheKey, model);
-
-        PartNode part;
-        part.id = node.id;
-        part.name = node.name;
-        part.meshIndex = meshIdx;
-        part.instanceCount = 1;
-        part.color = color;
-        part.hasGeometry = true;
-        // No material lookup here — a flattened compound has no XCAF
-        // product structure to hang a material attribute off. Color is the
-        // only usable per-part signal in this path.
-
-        node.partIndex = model.parts.size();
-        model.parts.push_back(part);
-        model.partIndexCache[cacheKey] = node.partIndex;
-        container.children.push_back(node);
     }
 
     if (solidIndex == 0) {
@@ -324,16 +456,11 @@ AssemblyNode StepParser::BuildFromGeometrySplit(
         node.id = "solid_0";
         node.isPart = true;
         node.name = "Part_0";
-
         std::string cacheKey = "geomsplit_0";
         size_t meshIdx = MeshConverter::ConvertAndCache(shape, cacheKey, model);
-
         PartNode part;
-        part.id = node.id;
-        part.name = node.name;
-        part.meshIndex = meshIdx;
+        part.id = node.id; part.name = node.name; part.meshIndex = meshIdx;
         part.hasGeometry = true;
-
         node.partIndex = model.parts.size();
         model.parts.push_back(part);
         model.partIndexCache[cacheKey] = node.partIndex;
@@ -344,9 +471,11 @@ AssemblyNode StepParser::BuildFromGeometrySplit(
 }
 
 AssemblyNode StepParser::BuildAssemblyTree(
+    STEPCAFControl_Reader& reader,
     const Handle(XCAFDoc_ShapeTool)& shapeTool,
     const Handle(XCAFDoc_ColorTool)& colorTool,
     const Handle(XCAFDoc_MaterialTool)& materialTool,
+    const Handle(XCAFDoc_LayerTool)& layerTool,
     const TDF_Label& label,
     const gp_Trsf& parentTransform,
     ModelData& model)
@@ -369,7 +498,6 @@ AssemblyNode StepParser::BuildAssemblyTree(
 
         for (Standard_Integer i = 1; i <= components.Length(); ++i) {
             TDF_Label compLabel = components.Value(i);
-
             TopLoc_Location compLoc = shapeTool->GetLocation(compLabel);
             gp_Trsf compTrsf = compLoc.IsIdentity() ? gp_Trsf() : compLoc.Transformation();
 
@@ -380,7 +508,8 @@ AssemblyNode StepParser::BuildAssemblyTree(
             }
 
             AssemblyNode child = BuildAssemblyTree(
-                shapeTool, colorTool, materialTool, targetLabel, compTrsf, model
+                reader, shapeTool, colorTool, materialTool, layerTool,
+                targetLabel, compTrsf, model
             );
             child.transform = compTrsf;
 
@@ -407,18 +536,11 @@ AssemblyNode StepParser::BuildAssemblyTree(
         std::string cacheKey = LabelToString(label);
 
         if (shape.IsNull()) {
-            // Expected and common — BOM-only items (consumables, reference
-            // placeholders like the blank-named PRODUCT_DEFINITIONs seen in
-            // the Safran seat file) legitimately have no geometry. Still
-            // record a real PartNode so downstream consumers don't fall
-            // back to a garbage index-0 lookup.
             Logger::Info("No geometry for BOM-only item: " + node.name);
-
             PartNode part;
             part.id = node.id;
             part.name = node.name;
             part.hasGeometry = false;
-
             node.partIndex = model.parts.size();
             model.parts.push_back(part);
             return node;
@@ -429,7 +551,7 @@ AssemblyNode StepParser::BuildAssemblyTree(
             size_t idx = existing->second;
             model.parts[idx].instanceCount++;
             node.partIndex = idx;
-            MeshConverter::ConvertAndCache(shape, cacheKey, model); // cache-hit no-op
+            MeshConverter::ConvertAndCache(shape, cacheKey, model);
             return node;
         }
 
@@ -445,6 +567,13 @@ AssemblyNode StepParser::BuildAssemblyTree(
         ExtractColor(colorTool, label, part.color);
         ExtractMaterial(materialTool, label, part.material);
         ExtractValidationProps(label, part.validation);
+        ExtractLayers(layerTool, label, part.layers);
+
+        ProductInfo prodInfo = StepEntityExtractor::GetProductInfo(reader, shape);
+        if (prodInfo.found) {
+            part.partNumber = prodInfo.partNumber;
+            part.descriptionText = prodInfo.description;
+        }
 
         size_t newIdx = model.parts.size();
         model.parts.push_back(part);

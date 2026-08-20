@@ -13,6 +13,8 @@ add_executable(cad-step-to-glb
     core/step_parser.cpp
     core/geometry_processor.cpp
     core/mesh_converter.cpp
+    core/step_header_parser.cpp
+    core/step_entity_extractor.cpp
     export/glb_exporter.cpp
     export/json_exporter.cpp
     utils/logger.cpp

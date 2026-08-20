@@ -31,11 +31,25 @@ static json ValidationToJson(const ValidationProps& v) {
     return j;
 }
 
+static json MetadataToJson(const DocumentMetadata& m) {
+    json j;
+    if (!m.originalFileName.empty())    j["originalFileName"] = m.originalFileName;
+    if (!m.timestamp.empty())           j["timestamp"] = m.timestamp;
+    if (!m.author.empty())              j["author"] = m.author;
+    if (!m.organization.empty())        j["organization"] = m.organization;
+    if (!m.originatingSystem.empty())   j["originatingSystem"] = m.originatingSystem;
+    if (!m.preprocessorVersion.empty()) j["preprocessorVersion"] = m.preprocessorVersion;
+    if (!m.schema.empty())              j["schema"] = m.schema;
+    if (!m.descriptionNotes.empty())    j["notes"] = m.descriptionNotes;
+    return j;
+}
+
 bool JsonExporter::Export(const ModelData& model, const std::string& jsonPath) {
     Logger::Info("Exporting JSON assembly tree and BOM: " + jsonPath);
 
     json j;
     j["name"] = "CAD Assembly";
+    j["document"] = MetadataToJson(model.documentMetadata); 
     j["total_parts"] = model.parts.size();
     j["unique_meshes"] = model.uniqueMeshes.size();
     j["hierarchy_available"] = model.hierarchyAvailable;
@@ -80,6 +94,10 @@ bool JsonExporter::Export(const ModelData& model, const std::string& jsonPath) {
 
                 json validation = ValidationToJson(part.validation);
                 if (!validation.is_null()) jnode["validationProperties"] = validation;
+
+                if (!part.partNumber.empty())      jnode["partNumber"] = part.partNumber;
+                if (!part.descriptionText.empty())  jnode["description"] = part.descriptionText;
+                if (!part.layers.empty())           jnode["layers"] = part.layers;
             }
 
             if (!node.children.empty()) {
@@ -113,7 +131,11 @@ bool JsonExporter::Export(const ModelData& model, const std::string& jsonPath) {
         if (!material.is_null()) item["material"] = material;
 
         json validation = ValidationToJson(part.validation);
+        
         if (!validation.is_null()) item["validationProperties"] = validation;
+        if (!part.partNumber.empty())      item["partNumber"] = part.partNumber;
+        if (!part.descriptionText.empty())  item["description"] = part.descriptionText;
+        if (!part.layers.empty())           item["layers"] = part.layers;
 
         bom.push_back(item);
     }
