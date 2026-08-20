@@ -1,10 +1,11 @@
 #include "step_entity_extractor.h"
 #include <XSControl_WorkSession.hxx>
 #include <XSControl_TransferReader.hxx>
-#include <Interface_Graph.hxx>
-#include <Interface_EntityIterator.hxx>
 #include <Interface_InterfaceModel.hxx>
 #include <StepShape_ShapeDefinitionRepresentation.hxx>
+#include <StepRepr_Representation.hxx>
+#include <StepRepr_RepresentationItem.hxx>
+#include <StepRepr_HArray1OfRepresentationItem.hxx>
 #include <StepRepr_ProductDefinitionShape.hxx>
 #include <StepRepr_PropertyDefinition.hxx>
 #include <StepBasic_ProductDefinition.hxx>
@@ -12,82 +13,121 @@
 #include <StepBasic_Product.hxx>
 #include <TCollection_HAsciiString.hxx>
 #include <Utils/logger.h>
-#include <vector>
-#include <set>
+#include <map>
 #include <memory>
+#include <StepRepr_ShapeRepresentationRelationship.hxx>
 
-// Interface_Graph is a plain value type in OCCT, NOT derived from
-// Standard_Transient — it can't use Handle(...), only ordinary C++
-// ownership (std::shared_ptr here).
+// Maps: geometry/representation entity number -> the SDR that owns it,
+// built once per file by scanning every SHAPE_DEFINITION_REPRESENTATION and
+// walking its OWN .used_representation field forward into whatever it
+// references (recursing into nested representations). This reads each
+// entity's own declared fields directly — the most stable part of OCCT's
+// STEP API — instead of relying on graph reverse-reference computation.
 static Handle(XSControl_WorkSession) s_cachedWS;
-static std::shared_ptr<Interface_Graph> s_cachedGraph;
+static std::shared_ptr<std::map<Standard_Integer, Handle(StepShape_ShapeDefinitionRepresentation)>> s_cachedMap;
 
-static Interface_Graph& GetOrBuildGraph(const Handle(XSControl_WorkSession)& WS) {
-    if (s_cachedWS != WS || !s_cachedGraph) {
-        s_cachedGraph = std::make_shared<Interface_Graph>(WS->Model());
+static void CollectItemsRecursive(
+    const Handle(Interface_InterfaceModel)& model,
+    const Handle(StepRepr_Representation)& rep,
+    const Handle(StepShape_ShapeDefinitionRepresentation)& owningSDR,
+    std::map<Standard_Integer, Handle(StepShape_ShapeDefinitionRepresentation)>& outMap,
+    int depth = 0)
+{
+    if (rep.IsNull() || depth > 4) return;
+
+    Standard_Integer repNum = model->Number(rep);
+    if (repNum != 0) outMap[repNum] = owningSDR;
+
+    Handle(StepRepr_HArray1OfRepresentationItem) items = rep->Items();
+    if (items.IsNull()) return;
+
+    for (Standard_Integer i = items->Lower(); i <= items->Upper(); ++i) {
+        Handle(StepRepr_RepresentationItem) item = items->Value(i);
+        if (item.IsNull()) continue;
+
+        Standard_Integer itemNum = model->Number(item);
+        if (itemNum != 0) outMap[itemNum] = owningSDR;
+
+        // Some items are themselves nested Representations (common in AP242
+        // multi-level shape structures) — recurse into those too.
+        Handle(StepRepr_Representation) nestedRep = Handle(StepRepr_Representation)::DownCast(item);
+        if (!nestedRep.IsNull()) {
+            CollectItemsRecursive(model, nestedRep, owningSDR, outMap, depth + 1);
+        }
+    }
+}
+
+// CATIA's AP242 export pattern: an SDR's own representation is often just a
+// placement/context wrapper, with the actual geometry-bearing representation
+// linked separately via SHAPE_REPRESENTATION_RELATIONSHIP rather than held
+// directly as an Item(). Confirmed present in this file (112 instances) —
+// propagate the SDR ownership across these links, both directions, and
+// repeat a few passes to catch chained relationships.
+static void PropagateAcrossRelationships(
+    const Handle(Interface_InterfaceModel)& model,
+    std::map<Standard_Integer, Handle(StepShape_ShapeDefinitionRepresentation)>& outMap)
+{
+    const int maxPasses = 3;
+    for (int pass = 0; pass < maxPasses; ++pass) {
+        bool changed = false;
+        Standard_Integer nb = model->NbEntities();
+
+        for (Standard_Integer i = 1; i <= nb; ++i) {
+            Handle(Standard_Transient) ent = model->Value(i);
+            Handle(StepRepr_ShapeRepresentationRelationship) rel =
+                Handle(StepRepr_ShapeRepresentationRelationship)::DownCast(ent);
+            if (rel.IsNull()) continue;
+
+            Handle(StepRepr_Representation) rep1 = rel->Rep1();
+            Handle(StepRepr_Representation) rep2 = rel->Rep2();
+            if (rep1.IsNull() || rep2.IsNull()) continue;
+
+            Standard_Integer num1 = model->Number(rep1);
+            Standard_Integer num2 = model->Number(rep2);
+
+            auto it1 = outMap.find(num1);
+            auto it2 = outMap.find(num2);
+
+            if (it1 != outMap.end() && it2 == outMap.end()) {
+                CollectItemsRecursive(model, rep2, it1->second, outMap);
+                changed = true;
+            } else if (it2 != outMap.end() && it1 == outMap.end()) {
+                CollectItemsRecursive(model, rep1, it2->second, outMap);
+                changed = true;
+            }
+        }
+
+        if (!changed) break;
+    }
+}
+
+static std::map<Standard_Integer, Handle(StepShape_ShapeDefinitionRepresentation)>&
+GetOrBuildSDRMap(const Handle(XSControl_WorkSession)& WS) {
+    if (s_cachedWS != WS || !s_cachedMap) {
+        s_cachedMap = std::make_shared<std::map<Standard_Integer, Handle(StepShape_ShapeDefinitionRepresentation)>>();
         s_cachedWS = WS;
-    }
-    return *s_cachedGraph;
-}
 
-static Handle(StepShape_ShapeDefinitionRepresentation) FindOwningSDR(
-    Interface_Graph& graph,
-    const Handle(Standard_Transient)& startEnt)
-{
-    std::vector<Handle(Standard_Transient)> frontier{startEnt};
-    std::set<Standard_Integer> visited;
-    const Handle(Interface_InterfaceModel)& model = graph.Model();
-    const int maxDepth = 5;
+        Handle(Interface_InterfaceModel) model = WS->Model();
+        Standard_Integer nb = model->NbEntities();
 
-    for (int depth = 0; depth < maxDepth && !frontier.empty(); ++depth) {
-        std::vector<Handle(Standard_Transient)> next;
-        for (auto& ent : frontier) {
-            Standard_Integer num = model->Number(ent);
-            if (num == 0 || visited.count(num)) continue;
-            visited.insert(num);
-
+        int sdrCount = 0;
+        for (Standard_Integer i = 1; i <= nb; ++i) {
+            Handle(Standard_Transient) ent = model->Value(i);
             Handle(StepShape_ShapeDefinitionRepresentation) sdr =
                 Handle(StepShape_ShapeDefinitionRepresentation)::DownCast(ent);
-            if (!sdr.IsNull()) return sdr;
+            if (sdr.IsNull()) continue;
+            ++sdrCount;
 
-            Interface_EntityIterator sharings = graph.Sharings(ent);
-            for (sharings.Start(); sharings.More(); sharings.Next()) {
-                next.push_back(sharings.Value());
-            }
+            Handle(StepRepr_Representation) usedRep = sdr->UsedRepresentation();
+            CollectItemsRecursive(model, usedRep, sdr, *s_cachedMap);
         }
-        frontier = next;
+
+        PropagateAcrossRelationships(model, *s_cachedMap);
+
+        Logger::Info("Built SDR lookup map: " + std::to_string(sdrCount) +
+                     " ShapeDefinitionRepresentations, " + std::to_string(s_cachedMap->size()) + " mapped geometry entities.");
     }
-    return nullptr;
-}
-
-static Handle(StepShape_ShapeDefinitionRepresentation) FindOwningSDR(
-    const Interface_Graph& graph,
-    const Handle(Standard_Transient)& startEnt)
-{
-    std::vector<Handle(Standard_Transient)> frontier{startEnt};
-    std::set<Standard_Integer> visited;
-    const Handle(Interface_InterfaceModel)& model = graph.Model();
-    const int maxDepth = 5;
-
-    for (int depth = 0; depth < maxDepth && !frontier.empty(); ++depth) {
-        std::vector<Handle(Standard_Transient)> next;
-        for (auto& ent : frontier) {
-            Standard_Integer num = model->Number(ent);
-            if (num == 0 || visited.count(num)) continue;
-            visited.insert(num);
-
-            Handle(StepShape_ShapeDefinitionRepresentation) sdr =
-                Handle(StepShape_ShapeDefinitionRepresentation)::DownCast(ent);
-            if (!sdr.IsNull()) return sdr;
-
-            Interface_EntityIterator sharings = graph.Sharings(ent);
-            for (sharings.Start(); sharings.More(); sharings.Next()) {
-                next.push_back(sharings.Value());
-            }
-        }
-        frontier = next;
-    }
-    return nullptr;
+    return *s_cachedMap;
 }
 
 ProductInfo StepEntityExtractor::GetProductInfo(STEPCAFControl_Reader& reader, const TopoDS_Shape& shape) {
@@ -108,19 +148,21 @@ ProductInfo StepEntityExtractor::GetProductInfo(STEPCAFControl_Reader& reader, c
         return info;
     }
 
-    Interface_Graph& graph = GetOrBuildGraph(WS);
-    Handle(StepShape_ShapeDefinitionRepresentation) sdr = FindOwningSDR(graph, ent);
+    auto& sdrMap = GetOrBuildSDRMap(WS);
+    Standard_Integer entNum = WS->Model()->Number(ent);
 
-    if (sdr.IsNull()) {
-        Logger::Warning("Could not walk up to a ShapeDefinitionRepresentation "
-                         "from entity type: " + std::string(ent->DynamicType()->Name()));
+    auto it = sdrMap.find(entNum);
+    if (it == sdrMap.end()) {
+        Logger::Warning("Entity type " + std::string(ent->DynamicType()->Name()) +
+                         " (#" + std::to_string(entNum) + ") not found in SDR map.");
         return info;
     }
 
+    Handle(StepShape_ShapeDefinitionRepresentation) sdr = it->second;
+
     Handle(StepRepr_PropertyDefinition) propDef = sdr->Definition().PropertyDefinition();
     if (propDef.IsNull()) {
-        Logger::Warning("SDR.Definition() is not a PropertyDefinition — "
-                         "likely a ShapeAspect instead, no Product to reach here.");
+        Logger::Warning("SDR.Definition() is not a PropertyDefinition.");
         return info;
     }
 
