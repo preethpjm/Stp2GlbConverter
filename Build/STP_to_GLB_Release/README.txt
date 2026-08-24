@@ -27,7 +27,7 @@ QUALITY (optional 5th argument)
   balanced  - (default) unchanged from original quality.
   precise   - finer mesh, slower. Use when visual fidelity matters more than speed.
 
-THRESHOLD (optional 6th argument, default 150)
+THRESHOLD (optional 6th argument, default 500)
 ------------------------------------------------
   Face-count above which a leaf part is checked for internal CATIA
   breadcrumb structure and split into sub-parts if found. Leave at default

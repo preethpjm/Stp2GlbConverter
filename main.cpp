@@ -18,7 +18,7 @@ static double ParseQuality(const std::string& s) {
 }
 
 static int ParseThreshold(const std::string& s) {
-    try { return std::stoi(s); } catch (...) { return 150; }
+    try { return std::stoi(s); } catch (...) { return 500; }
 }
 
 int main(int argc, char* argv[]) {
@@ -27,7 +27,7 @@ int main(int argc, char* argv[]) {
     std::string jsonOut   = (argc > 3) ? argv[3] : "assembly.json";
     HierarchyMode mode = (argc > 4) ? ParseMode(argv[4]) : HierarchyMode::Auto;
     double quality = (argc > 5) ? ParseQuality(argv[5]) : 0.001;
-    int breadcrumbThreshold = (argc > 6) ? ParseThreshold(argv[6]) : 150;
+    int breadcrumbThreshold = (argc > 6) ? ParseThreshold(argv[6]) : 500;
 
     std::cout << "=== STEP to GLB Converter ===" << std::endl;
     std::cout << "Input:  " << inputFile << std::endl;

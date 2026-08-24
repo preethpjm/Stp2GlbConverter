@@ -23,7 +23,7 @@ if "%GLB%"==""       set GLB=%~dpn1.glb
 if "%JSON%"==""      set JSON=%~dpn1_assembly.json
 if "%MODE%"==""      set MODE=auto
 if "%QUALITY%"==""   set QUALITY=balanced
-if "%THRESHOLD%"=="" set THRESHOLD=150
+if "%THRESHOLD%"=="" set THRESHOLD=500
 
 echo.
 echo  Input     : %INPUT%

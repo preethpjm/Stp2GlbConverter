@@ -34,6 +34,38 @@ static std::string LabelToString(const TDF_Label& label) {
     return entry.ToCString();
 }
 
+// Cheap pre-check: samples a handful of faces instead of walking all of
+// them. Confirmed real case: on a well-hierarchical file, several
+// genuinely single, complex parts (an identification plate with engraved
+// text, 805 faces) triggered a full per-face breadcrumb lookup — 5+
+// seconds of wasted work — purely because face count alone can't tell
+// "one detailed part" from "multiple fused parts." A real fused blob
+// shows breadcrumb diversity even in a small sample (fused sub-parts are
+// large contiguous face groups); a genuinely single part doesn't.
+static bool LikelyHasMultipleBreadcrumbGroups(
+    STEPCAFControl_Reader& reader,
+    const TopoDS_Shape& shape,
+    int sampleSize = 12)
+{
+    std::string firstName;
+    bool haveFirst = false;
+    int checked = 0;
+
+    for (TopExp_Explorer exp(shape, TopAbs_FACE); exp.More() && checked < sampleSize; exp.Next(), ++checked) {
+        TopoDS_Face face = TopoDS::Face(exp.Current());
+        std::string name = StepEntityExtractor::GetFaceBreadcrumb(reader, face);
+        if (name.empty()) continue;
+
+        if (!haveFirst) {
+            firstName = name;
+            haveFirst = true;
+        } else if (name != firstName) {
+            return true;  // genuine diversity found — worth the full pass
+        }
+    }
+    return false;  // sample was homogeneous — not worth exploring further
+}
+
 AssemblyNode StepParser::SplitLeafByBreadcrumb(
     STEPCAFControl_Reader& reader,
     const TopoDS_Shape& shape,
@@ -663,9 +695,11 @@ AssemblyNode StepParser::BuildAssemblyTree(
         }
 
         AssemblyNode split;
-        if (faceCount > model.breadcrumbSplitFaceThreshold) {
+        if (faceCount > model.breadcrumbSplitFaceThreshold &&
+            LikelyHasMultipleBreadcrumbGroups(reader, shape)) {
             split = SplitLeafByBreadcrumb(reader, shape, node.id, node.name, model);
         }
+        
         if (!split.children.empty()) {
             ProductInfo prodInfo = StepEntityExtractor::GetProductInfo(reader, shape);
             for (auto& seg : split.children) {

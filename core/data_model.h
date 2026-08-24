@@ -104,6 +104,6 @@ struct ModelData {
     std::vector<RootShapeInfo> rootReports;
     double meshQualityMultiplier = 0.001;
     DocumentMetadata documentMetadata;  // NEW
-    int breadcrumbSplitFaceThreshold = 150;
+    int breadcrumbSplitFaceThreshold = 500;
     std::unordered_map<std::string, AssemblyNode> splitResultCache;
 };
