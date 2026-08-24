@@ -617,13 +617,45 @@ AssemblyNode StepParser::BuildAssemblyTree(
             model.parts.push_back(part);
             return node;
         }
-        
+
+        // Cache checks come FIRST, before any geometry work at all. This is
+        // the fix for hierarchy-defined files being slow: a heavily-
+        // instanced part (e.g. a screw used 200 times) should cost O(1) per
+        // repeat instance — just an increment — not re-walk faces or
+        // re-run entity lookups 200 times. Previously the face-count walk
+        // ran unconditionally before this check, so every repeat instance
+        // paid full geometry-traversal cost for nothing.
+
+        auto existing = model.partIndexCache.find(cacheKey);
+        if (existing != model.partIndexCache.end()) {
+            size_t idx = existing->second;
+            model.parts[idx].instanceCount++;
+            node.partIndex = idx;
+            return node;
+        }
+
+        // Second cache: a previously breadcrumb-split fused leaf. Without
+        // this, a repeated fused component (e.g. the same harness assembly
+        // used at two mounting points) would redo the ENTIRE expensive
+        // split — explode every face, re-run per-face entity lookups,
+        // re-mesh every segment — on every single repeat occurrence.
+        auto splitExisting = model.splitResultCache.find(cacheKey);
+        if (splitExisting != model.splitResultCache.end()) {
+            AssemblyNode reused = splitExisting->second;  // deep copy (vector members)
+            for (auto& seg : reused.children) {
+                if (seg.partIndex < model.parts.size()) {
+                    model.parts[seg.partIndex].instanceCount++;
+                }
+            }
+            return reused;
+        }
+
+        // Genuinely new, unique part from here on — all of this work is
+        // O(1) per unique part, not O(instances), which is the correct
+        // cost profile for a hierarchy-defined file.
         Standard_Integer faceCount = 0;
         for (TopExp_Explorer fe(shape, TopAbs_FACE); fe.More(); fe.Next()) ++faceCount;
 
-        // Log anything unusually large regardless of threshold, so you can
-        // see the real face-count distribution across a file and tune
-        // breadcrumbSplitFaceThreshold with actual data instead of guessing.
         if (faceCount > 50) {
             Logger::Info("Leaf \"" + node.name + "\" has " + std::to_string(faceCount) +
                          " faces (threshold=" + std::to_string(model.breadcrumbSplitFaceThreshold) +
@@ -635,9 +667,6 @@ AssemblyNode StepParser::BuildAssemblyTree(
             split = SplitLeafByBreadcrumb(reader, shape, node.id, node.name, model);
         }
         if (!split.children.empty()) {
-            // Splitting succeeded — still attach the leaf's own product/color
-            // info to every resulting segment, since they all share the same
-            // top-level PRODUCT identity even though internally more granular.
             ProductInfo prodInfo = StepEntityExtractor::GetProductInfo(reader, shape);
             for (auto& seg : split.children) {
                 if (seg.partIndex < model.parts.size()) {
@@ -648,16 +677,8 @@ AssemblyNode StepParser::BuildAssemblyTree(
                     }
                 }
             }
+            model.splitResultCache[cacheKey] = split;  // cache the whole subtree for reuse
             return split;
-        }
-
-        auto existing = model.partIndexCache.find(cacheKey);
-        if (existing != model.partIndexCache.end()) {
-            size_t idx = existing->second;
-            model.parts[idx].instanceCount++;
-            node.partIndex = idx;
-            MeshConverter::ConvertAndCache(shape, cacheKey, model);
-            return node;
         }
 
         size_t meshIdx = MeshConverter::ConvertAndCache(shape, cacheKey, model);
