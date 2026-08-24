@@ -19,7 +19,23 @@
 #include <map>
 #include <memory>
 
-// --- Face breadcrumb lookup (used by SplitLeafByBreadcrumb) --------------
+// Which mode actually resolves an entity is a property of how this file's
+// transfer was built — almost always the same mode succeeds every time
+// within one file. Remembering it and trying it first turns "try up to 4
+// lookups per shape" into "try 1" for the common case, instead of
+// re-guessing on every single new part.
+static Standard_Integer s_lastSuccessfulMode = 1;
+
+static Handle(Standard_Transient) FindEntityFromShape(const Handle(XSControl_TransferReader)& TR, const TopoDS_Shape& shape) {
+    Handle(Standard_Transient) ent = TR->EntityFromShapeResult(shape, s_lastSuccessfulMode);
+    if (!ent.IsNull()) return ent;
+    for (Standard_Integer mode = 1; mode <= 4; ++mode) {
+        if (mode == s_lastSuccessfulMode) continue;
+        ent = TR->EntityFromShapeResult(shape, mode);
+        if (!ent.IsNull()) { s_lastSuccessfulMode = mode; return ent; }
+    }
+    return ent;
+}
 
 std::string StepEntityExtractor::GetFaceBreadcrumb(STEPCAFControl_Reader& reader, const TopoDS_Face& face) {
     Handle(XSControl_WorkSession) WS = reader.Reader().WS();
@@ -27,12 +43,8 @@ std::string StepEntityExtractor::GetFaceBreadcrumb(STEPCAFControl_Reader& reader
     Handle(XSControl_TransferReader) TR = WS->TransferReader();
     if (TR.IsNull()) return "";
 
-    Handle(Standard_Transient) ent;
-    for (Standard_Integer mode = 1; mode <= 4 && ent.IsNull(); ++mode) {
-        ent = TR->EntityFromShapeResult(face, mode);
-    }
+    Handle(Standard_Transient) ent = FindEntityFromShape(TR, face);
     if (ent.IsNull()) return "";
-
     Handle(StepShape_AdvancedFace) af = Handle(StepShape_AdvancedFace)::DownCast(ent);
     if (af.IsNull() || af->Name().IsNull()) return "";
 
@@ -75,42 +87,6 @@ static void CollectItemsRecursive(
     }
 }
 
-static void PropagateAcrossRelationships(
-    const Handle(Interface_InterfaceModel)& model,
-    std::map<Standard_Integer, Handle(StepShape_ShapeDefinitionRepresentation)>& outMap)
-{
-    const int maxPasses = 3;
-    for (int pass = 0; pass < maxPasses; ++pass) {
-        bool changed = false;
-        Standard_Integer nb = model->NbEntities();
-
-        for (Standard_Integer i = 1; i <= nb; ++i) {
-            Handle(Standard_Transient) ent = model->Value(i);
-            Handle(StepRepr_ShapeRepresentationRelationship) rel =
-                Handle(StepRepr_ShapeRepresentationRelationship)::DownCast(ent);
-            if (rel.IsNull()) continue;
-
-            Handle(StepRepr_Representation) rep1 = rel->Rep1();
-            Handle(StepRepr_Representation) rep2 = rel->Rep2();
-            if (rep1.IsNull() || rep2.IsNull()) continue;
-
-            Standard_Integer num1 = model->Number(rep1);
-            Standard_Integer num2 = model->Number(rep2);
-
-            auto it1 = outMap.find(num1);
-            auto it2 = outMap.find(num2);
-
-            if (it1 != outMap.end() && it2 == outMap.end()) {
-                CollectItemsRecursive(model, rep2, it1->second, outMap);
-                changed = true;
-            } else if (it2 != outMap.end() && it1 == outMap.end()) {
-                CollectItemsRecursive(model, rep1, it2->second, outMap);
-                changed = true;
-            }
-        }
-        if (!changed) break;
-    }
-}
 
 static std::map<Standard_Integer, Handle(StepShape_ShapeDefinitionRepresentation)>&
 GetOrBuildSDRMap(const Handle(XSControl_WorkSession)& WS) {
@@ -122,21 +98,67 @@ GetOrBuildSDRMap(const Handle(XSControl_WorkSession)& WS) {
         Standard_Integer nb = model->NbEntities();
 
         int sdrCount = 0;
+        std::vector<Handle(StepRepr_ShapeRepresentationRelationship)> relationships;
+
+        // Single full-model pass collecting BOTH SDRs and relationships,
+        // instead of 1 pass for SDRs + 3 more full passes for
+        // relationships (4 total full-file scans). On a large file,
+        // NbEntities() can be in the tens of millions — dominated by raw
+        // geometry (B-spline curves, points) that will never match either
+        // type. Scanning once instead of four times is the real fix for
+        // this being slow specifically on large files, since this whole
+        // setup step runs once per file but its cost scales with total
+        // entity count, not part count.
         for (Standard_Integer i = 1; i <= nb; ++i) {
             Handle(Standard_Transient) ent = model->Value(i);
+
             Handle(StepShape_ShapeDefinitionRepresentation) sdr =
                 Handle(StepShape_ShapeDefinitionRepresentation)::DownCast(ent);
-            if (sdr.IsNull()) continue;
-            ++sdrCount;
+            if (!sdr.IsNull()) {
+                ++sdrCount;
+                Handle(StepRepr_Representation) usedRep = sdr->UsedRepresentation();
+                CollectItemsRecursive(model, usedRep, sdr, *s_cachedMap);
+                continue;
+            }
 
-            Handle(StepRepr_Representation) usedRep = sdr->UsedRepresentation();
-            CollectItemsRecursive(model, usedRep, sdr, *s_cachedMap);
+            Handle(StepRepr_ShapeRepresentationRelationship) rel =
+                Handle(StepRepr_ShapeRepresentationRelationship)::DownCast(ent);
+            if (!rel.IsNull()) {
+                relationships.push_back(rel);
+            }
         }
 
-        PropagateAcrossRelationships(model, *s_cachedMap);
+        // Propagation passes now only iterate the (much smaller) list of
+        // actual relationship entities found above — hundreds, typically,
+        // not tens of millions — instead of re-scanning the whole model.
+        const int maxPasses = 3;
+        for (int pass = 0; pass < maxPasses; ++pass) {
+            bool changed = false;
+            for (auto& rel : relationships) {
+                Handle(StepRepr_Representation) rep1 = rel->Rep1();
+                Handle(StepRepr_Representation) rep2 = rel->Rep2();
+                if (rep1.IsNull() || rep2.IsNull()) continue;
+
+                Standard_Integer num1 = model->Number(rep1);
+                Standard_Integer num2 = model->Number(rep2);
+
+                auto it1 = s_cachedMap->find(num1);
+                auto it2 = s_cachedMap->find(num2);
+
+                if (it1 != s_cachedMap->end() && it2 == s_cachedMap->end()) {
+                    CollectItemsRecursive(model, rep2, it1->second, *s_cachedMap);
+                    changed = true;
+                } else if (it2 != s_cachedMap->end() && it1 == s_cachedMap->end()) {
+                    CollectItemsRecursive(model, rep1, it2->second, *s_cachedMap);
+                    changed = true;
+                }
+            }
+            if (!changed) break;
+        }
 
         Logger::Info("Built SDR lookup map: " + std::to_string(sdrCount) +
-                     " ShapeDefinitionRepresentations, " + std::to_string(s_cachedMap->size()) + " mapped geometry entities.");
+                     " ShapeDefinitionRepresentations, " + std::to_string(relationships.size()) +
+                     " relationships, " + std::to_string(s_cachedMap->size()) + " mapped geometry entities.");
     }
     return *s_cachedMap;
 }
@@ -152,10 +174,7 @@ ProductInfo StepEntityExtractor::GetProductInfo(STEPCAFControl_Reader& reader, c
     Handle(XSControl_TransferReader) TR = WS->TransferReader();
     if (TR.IsNull()) return info;
 
-    Handle(Standard_Transient) ent;
-    for (Standard_Integer mode = 1; mode <= 4 && ent.IsNull(); ++mode) {
-        ent = TR->EntityFromShapeResult(shape, mode);
-    }
+    Handle(Standard_Transient) ent = FindEntityFromShape(TR, shape);
     if (ent.IsNull()) {
         Logger::Warning("EntityFromShapeResult found nothing for this shape (tried modes 1-4).");
         return info;
