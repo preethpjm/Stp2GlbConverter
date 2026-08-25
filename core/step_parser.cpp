@@ -2,6 +2,7 @@
 #include "mesh_converter.h"
 #include "step_header_parser.h"
 #include "step_entity_extractor.h"
+#include <iostream>
 #include <STEPCAFControl_Reader.hxx>
 #include <XCAFApp_Application.hxx>
 #include <XCAFDoc_DocumentTool.hxx>

@@ -141,6 +141,9 @@ bool GlbExporter::Export(const ModelData& model, const std::string& glbPath) {
 
         tinygltf::Node gltfNode;
         gltfNode.name = node.name.empty() ? ("Node_" + node.id) : node.name;
+        tinygltf::Value::Object extrasObj;
+        extrasObj["partId"] = tinygltf::Value(node.id);
+        gltfNode.extras = tinygltf::Value(extrasObj);
 
         std::array<double, 16> matrix{};
         ConvertTransform(node.transform, matrix);
