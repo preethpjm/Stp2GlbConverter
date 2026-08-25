@@ -32,6 +32,7 @@
 #include <TopTools_IndexedMapOfShape.hxx>
 #include <TopExp.hxx>
 #include <functional>
+#include <chrono>
 
 static std::string LabelToString(const TDF_Label& label) {
     TCollection_AsciiString entry;
@@ -261,6 +262,24 @@ std::vector<StepParser::FaceGroup> StepParser::SplitByFaceStyling(
     return result;
 }
 
+static int CountLeafParts(const Handle(XCAFDoc_ShapeTool)& shapeTool, const TDF_Label& label) {
+    if (shapeTool->IsAssembly(label)) {
+        TDF_LabelSequence components;
+        shapeTool->GetComponents(label, components, Standard_False);
+        int count = 0;
+        for (Standard_Integer i = 1; i <= components.Length(); ++i) {
+            TDF_Label compLabel = components.Value(i);
+            TDF_Label referred;
+            TDF_Label targetLabel = compLabel;
+            if (XCAFDoc_ShapeTool::GetReferredShape(compLabel, referred)) {
+                targetLabel = referred;
+            }
+            count += CountLeafParts(shapeTool, targetLabel);
+        }
+        return count;
+    }
+    return 1;  // leaf — counts every occurrence, matching what BuildAssemblyTree actually visits
+}
 
 bool StepParser::Load(const std::string& stepFile, ModelData& outModel, HierarchyMode mode) {
     Logger::Info("Parsing STEP file: " + stepFile);
@@ -314,6 +333,16 @@ bool StepParser::Load(const std::string& stepFile, ModelData& outModel, Hierarch
     outModel.root.name = "Root";
     outModel.root.id   = "root";
     outModel.hierarchyAvailable = true;
+
+    for (Standard_Integer i = 1; i <= freeShapes.Length(); ++i) {
+        if (TreeHasRealStructure(shapeTool, freeShapes.Value(i))) {
+            outModel.totalNodesEstimate += CountLeafParts(shapeTool, freeShapes.Value(i));
+        } else {
+            outModel.totalNodesEstimate += 1;  // flat/geometry-split path: unknown until processed
+        }
+    }
+    std::cout << "PROGRESS TOTAL " << outModel.totalNodesEstimate << std::endl;
+    Logger::Info("Estimated nodes to process: " + std::to_string(outModel.totalNodesEstimate));
 
     for (Standard_Integer i = 1; i <= freeShapes.Length(); ++i) {
         const TDF_Label& rootLabel = freeShapes.Value(i);
@@ -684,7 +713,14 @@ AssemblyNode StepParser::BuildAssemblyTree(
 
     } else {
         node.isPart = true;
+        model.nodesVisited++;
+        if (model.totalNodesEstimate > 0 &&
+            (model.nodesVisited % 10 == 0 || model.nodesVisited == model.totalNodesEstimate)) {
+            std::cout << "PROGRESS " << model.nodesVisited << " " << model.totalNodesEstimate << std::endl;
+            std::cout.flush();
+        }
         TopoDS_Shape shape = shapeTool->GetShape(label);
+
         std::string cacheKey = LabelToString(label);
 
         if (shape.IsNull()) {
@@ -763,7 +799,9 @@ AssemblyNode StepParser::BuildAssemblyTree(
             return split;
         }
 
+        auto meshStart = std::chrono::steady_clock::now();
         size_t meshIdx = MeshConverter::ConvertAndCache(shape, cacheKey, model);
+        double meshMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - meshStart).count();
 
         PartNode part;
         part.id = node.id;
@@ -777,7 +815,14 @@ AssemblyNode StepParser::BuildAssemblyTree(
         ExtractValidationProps(label, part.validation);
         ExtractLayers(layerTool, label, part.layers);
 
+        auto entityStart = std::chrono::steady_clock::now();
         ProductInfo prodInfo = StepEntityExtractor::GetProductInfo(reader, shape);
+        double entityMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - entityStart).count();
+
+        if (meshMs > 1000 || entityMs > 1000) {
+            Logger::Info("Leaf \"" + node.name + "\" timing — mesh: " + std::to_string((int)meshMs) +
+                         "ms, entity lookup: " + std::to_string((int)entityMs) + "ms");
+        }
         if (prodInfo.found) {
             part.partNumber = prodInfo.partNumber;
             part.descriptionText = prodInfo.description;

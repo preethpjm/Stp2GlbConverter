@@ -106,4 +106,6 @@ struct ModelData {
     DocumentMetadata documentMetadata;  // NEW
     int breadcrumbSplitFaceThreshold = 500;
     std::unordered_map<std::string, AssemblyNode> splitResultCache;
+    int nodesVisited = 0;
+    int totalNodesEstimate = 0;
 };
