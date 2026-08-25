@@ -27,6 +27,11 @@
 #include <TopoDS_Face.hxx>
 #include <BRep_Builder.hxx>
 #include <map>
+#include <TopTools_IndexedDataMapOfShapeListOfShape.hxx>
+#include <TopTools_ListOfShape.hxx>
+#include <TopTools_IndexedMapOfShape.hxx>
+#include <TopExp.hxx>
+#include <functional>
 
 static std::string LabelToString(const TDF_Label& label) {
     TCollection_AsciiString entry;
@@ -66,6 +71,46 @@ static bool LikelyHasMultipleBreadcrumbGroups(
     return false;  // sample was homogeneous — not worth exploring further
 }
 
+static std::vector<std::vector<TopoDS_Face>> GroupFacesByConnectivity(const TopoDS_Shape& shape) {
+    TopTools_IndexedMapOfShape faceMap;
+    TopExp::MapShapes(shape, TopAbs_FACE, faceMap);
+
+    TopTools_IndexedDataMapOfShapeListOfShape edgeFaceMap;
+    TopExp::MapShapesAndAncestors(shape, TopAbs_EDGE, TopAbs_FACE, edgeFaceMap);
+
+    int n = faceMap.Extent();
+    std::vector<int> parent(n + 1);
+    for (int i = 1; i <= n; ++i) parent[i] = i;
+
+    std::function<int(int)> find = [&](int x) {
+        while (parent[x] != x) { parent[x] = parent[parent[x]]; x = parent[x]; }
+        return x;
+    };
+    auto unite = [&](int a, int b) {
+        a = find(a); b = find(b);
+        if (a != b) parent[a] = b;
+    };
+
+    for (int e = 1; e <= edgeFaceMap.Extent(); ++e) {
+        const TopTools_ListOfShape& faces = edgeFaceMap.FindFromIndex(e);
+        std::vector<int> idxs;
+        for (TopTools_ListIteratorOfListOfShape it(faces); it.More(); it.Next()) {
+            int idx = faceMap.FindIndex(it.Value());
+            if (idx > 0) idxs.push_back(idx);
+        }
+        for (size_t i = 1; i < idxs.size(); ++i) unite(idxs[0], idxs[i]);
+    }
+
+    std::map<int, std::vector<TopoDS_Face>> groups;
+    for (int i = 1; i <= n; ++i) {
+        groups[find(i)].push_back(TopoDS::Face(faceMap.FindKey(i)));
+    }
+
+    std::vector<std::vector<TopoDS_Face>> result;
+    for (auto& kv : groups) result.push_back(kv.second);
+    return result;
+}
+
 AssemblyNode StepParser::SplitLeafByBreadcrumb(
     STEPCAFControl_Reader& reader,
     const TopoDS_Shape& shape,
@@ -73,13 +118,16 @@ AssemblyNode StepParser::SplitLeafByBreadcrumb(
     const std::string& baseName,
     ModelData& model)
 {
-    std::map<std::string, std::vector<TopoDS_Face>> groups;
 
-    TopExp_Explorer exp(shape, TopAbs_FACE);
-    for (; exp.More(); exp.Next()) {
-        TopoDS_Face face = TopoDS::Face(exp.Current());
-        std::string breadcrumb = StepEntityExtractor::GetFaceBreadcrumb(reader, face);
-        groups[breadcrumb].push_back(face);
+    // Cheap topology pass first: connected components via shared edges.
+    // Only ONE breadcrumb lookup per component, not one per face.
+    auto connectivityGroups = GroupFacesByConnectivity(shape);
+
+    std::map<std::string, std::vector<TopoDS_Face>> groups;
+    for (auto& component : connectivityGroups) {
+        std::string breadcrumb = StepEntityExtractor::GetFaceBreadcrumb(reader, component[0]);
+        auto& target = groups[breadcrumb];
+        target.insert(target.end(), component.begin(), component.end());
     }
 
     // Only one bucket — no internal structure recovered, keep as a single
@@ -699,7 +747,7 @@ AssemblyNode StepParser::BuildAssemblyTree(
             LikelyHasMultipleBreadcrumbGroups(reader, shape)) {
             split = SplitLeafByBreadcrumb(reader, shape, node.id, node.name, model);
         }
-        
+
         if (!split.children.empty()) {
             ProductInfo prodInfo = StepEntityExtractor::GetProductInfo(reader, shape);
             for (auto& seg : split.children) {
