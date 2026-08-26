@@ -143,6 +143,12 @@ bool GlbExporter::Export(const ModelData& model, const std::string& glbPath) {
         gltfNode.name = node.name.empty() ? ("Node_" + node.id) : node.name;
         tinygltf::Value::Object extrasObj;
         extrasObj["partId"] = tinygltf::Value(node.id);
+        if (node.isPart && node.partIndex < model.parts.size()) {
+            const std::string& pn = model.parts[node.partIndex].partNumber;
+            if (!pn.empty()) {
+                extrasObj["partNumber"] = tinygltf::Value(pn);
+            }
+        }
         gltfNode.extras = tinygltf::Value(extrasObj);
 
         std::array<double, 16> matrix{};
